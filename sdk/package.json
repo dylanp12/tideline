@@ -1,0 +1,16 @@
+{
+  "name": "tideline-client",
+  "version": "0.1.0",
+  "description": "Client SDK for Tideline — resumable AI-output streaming (publish/subscribe + React useStream).",
+  "type": "module",
+  "main": "tideline.js",
+  "exports": {
+    ".": "./tideline.js",
+    "./react": "./react.js"
+  },
+  "peerDependencies": { "react": ">=18" },
+  "peerDependenciesMeta": { "react": { "optional": true } },
+  "files": ["tideline.js", "react.js"],
+  "license": "MIT",
+  "keywords": ["sse", "streaming", "llm", "ai", "real-time", "resumable", "eventsource"]
+}
