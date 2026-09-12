@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Tideline — resumable AI streaming demo</title>
+<style>
+  body { font: 15px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; background:#0b0e14; color:#cdd6f4; max-width:760px; margin:40px auto; padding:0 16px; }
+  h1 { color:#89b4fa; font-size:22px; margin-bottom:2px; }
+  .muted { color:#7f849c; }
+  button { font:inherit; background:#1e2030; color:#cdd6f4; border:1px solid #313244; border-radius:6px; padding:8px 14px; cursor:pointer; margin:6px 6px 6px 0; }
+  button:hover { border-color:#89b4fa; }
+  #out { white-space:pre-wrap; background:#11141c; border:1px solid #313244; border-radius:8px; padding:16px; min-height:130px; margin-top:14px; }
+  #status { margin-top:12px; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; vertical-align:middle; }
+  code { color:#a6e3a1; }
+</style>
+</head>
+<body>
+  <h1>Tideline</h1>
+  <p class="muted">Resumable AI-output streaming. This page acts as both the <b>backend</b> (publishes tokens) and a <b>client</b> (watches over SSE), against a local Tideline server on <code>:8080</code>.</p>
+  <p class="muted">Stream id: <code id="sid"></code> &nbsp;·&nbsp; open this page in a 2nd tab to watch one generation <b>fan out</b> to both.</p>
+
+  <button id="gen">▶ Generate response</button>
+  <button id="cut">✂ Disconnect 3s &amp; resume</button>
+  <button id="clear">Clear</button>
+
+  <div id="status"><span class="dot" style="background:#7f849c"></span><span id="statusText">connecting…</span></div>
+  <div id="out"></div>
+
+<script>
+const BASE = "http://localhost:8080";
+const sid = (location.hash.slice(1) || "live");
+document.getElementById("sid").textContent = sid;
+
+const out = document.getElementById("out");
+const statusText = document.getElementById("statusText");
+const dot = document.querySelector(".dot");
+function setStatus(t, c){ statusText.textContent = t; dot.style.background = c; }
+
+let es = null;
+function connect(from){
+  if (es) es.close();
+  let url = `${BASE}/streams/${sid}`;
+  if (from != null) url += `?from=${from}`;
+  es = new EventSource(url);
+  es.onopen = () => setStatus("connected — streaming", "#a6e3a1");
+  es.onmessage = (e) => { out.textContent += e.data; };
+  es.addEventListener("done", () => { es.close(); setStatus("done", "#89b4fa"); });
+  es.onerror = () => setStatus("reconnecting…", "#f9e2af");
+}
+connect();
+
+document.getElementById("gen").onclick = async () => {
+  out.textContent = "";
+  const words = ("Tideline streams large language model output to any number of clients " +
+    "reliably even when the network drops mid generation the client simply " +
+    "reconnects and resumes exactly where it left off no tokens lost no tokens " +
+    "duplicated").split(" ");
+  for (const w of words){
+    await fetch(`${BASE}/streams/${sid}`, { method:"POST", body: w + " " });
+    await new Promise(r => setTimeout(r, 90));
+  }
+  await fetch(`${BASE}/streams/${sid}/complete`, { method:"POST" });
+};
+
+document.getElementById("cut").onclick = () => {
+  // Simulate a dropped client: remember the offset, disconnect, then resume.
+  const seen = (es && es.lastEventId !== "") ? Number(es.lastEventId) + 1 : 0;
+  if (es) es.close();
+  setStatus("disconnected — resuming in 3s (server keeps buffering)…", "#f38ba8");
+  setTimeout(() => connect(seen), 3000);
+};
+
+document.getElementById("clear").onclick = () => { out.textContent = ""; };
+</script>
+</body>
+</html>

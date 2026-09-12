@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tideline — a record of what your agents did</title>
+<meta name="description" content="An open protocol and reference implementation for tamper-evident records of AI agent runs, with human-approval gates. Verify without trusting the server. SDKs for TypeScript, Python, Rust and Go.">
+<meta property="og:title" content="Tideline — a record of what your agents did">
+<meta property="og:description" content="Tamper-evident records of AI agent decisions, verifiable by anyone. Open protocol, four SDKs, self-hostable.">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* Archival, not editorial: a cool bond-paper white rather than cream. */
+  --paper:#F6F7FA;
+  --card:#FFFFFF;
+  --ink:#11151E;
+  --ink-soft:#4C5464;
+  --ink-faint:#838C9D;
+  --rule:#DEE3EB;
+  /* Oxidised copper — the colour of a seal that has been on a document a long
+     time. Reserved for "this verifies". */
+  --verdigris:#26766A;
+  --verdigris-wash:#E8F2F0;
+  /* Deep seal red, not alarm red. Reserved for "this does not". */
+  --seal:#A3322C;
+  --seal-wash:#FAEDEC;
+  /* Aged brass: the thread running through the chain. Used nowhere else. */
+  --thread:#B39B5E;
+
+  --display:"Archivo",system-ui,sans-serif;
+  --body:"Source Serif 4",Georgia,serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --paper:#0E121A;--card:#161B26;--ink:#EDF0F5;--ink-soft:#A5AEBF;--ink-faint:#6C7688;
+    --rule:#252C3A;--verdigris:#57B3A2;--verdigris-wash:#132924;
+    --seal:#E0776F;--seal-wash:#2A1614;--thread:#8E7B48;
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--body);font-size:17px;line-height:1.62;
+  font-optical-sizing:auto;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+a{color:inherit}
+code,kbd{font-family:var(--mono)}
+
+/* ---- stamped labels: the structural device, and it earns its place --------
+   Every eyebrow here names a real artefact (a protocol version, an article of
+   law, a registry), never a decorative number. */
+.stamp{
+  font-family:var(--display);font-weight:600;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--ink-faint);
+  display:inline-block;border:1px solid var(--rule);border-radius:2px;
+  padding:4px 9px;background:var(--card);
+}
+
+/* ---- header ------------------------------------------------------------ */
+header{border-bottom:1px solid var(--rule);background:var(--card)}
+.bar{display:flex;align-items:center;gap:20px;padding:16px 0}
+.mark{font-family:var(--display);font-weight:700;font-size:17px;letter-spacing:-.02em;text-decoration:none}
+.mark span{color:var(--verdigris)}
+nav{margin-left:auto;display:flex;gap:22px;align-items:center;flex-wrap:wrap}
+nav a{
+  font-family:var(--display);font-size:13.5px;font-weight:500;color:var(--ink-soft);
+  text-decoration:none;padding:4px 0;border-bottom:1px solid transparent;
+}
+nav a:hover{color:var(--ink);border-bottom-color:var(--thread)}
+
+/* ---- hero -------------------------------------------------------------- */
+.hero{padding:72px 0 56px}
+h1{
+  font-family:var(--display);font-weight:700;
+  font-size:clamp(38px,6.2vw,66px);line-height:1.02;letter-spacing:-.035em;
+  margin:22px 0 0;max-width:15ch;
+}
+h1 em{font-style:normal;color:var(--verdigris)}
+.lede{
+  font-size:clamp(18px,2.2vw,21px);color:var(--ink-soft);
+  max-width:56ch;margin:22px 0 0;
+}
+
+/* ---- the chain: the one bold thing on this page ------------------------ */
+.chain{
+  margin:44px 0 0;background:var(--card);
+  border:1px solid var(--rule);border-radius:5px;overflow:hidden;
+}
+.chain-head{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:15px 20px;border-bottom:1px solid var(--rule);
+}
+.chain-head h2{
+  font-family:var(--display);font-size:13px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase;margin:0;color:var(--ink-soft);
+}
+.hint{font-size:14px;color:var(--ink-faint);margin-left:auto}
+.hint kbd{
+  font-size:12px;border:1px solid var(--rule);border-radius:3px;
+  padding:1px 5px;background:var(--paper);
+}
+
+.events{list-style:none;margin:0;padding:6px 0}
+.event{
+  display:grid;grid-template-columns:52px 1fr minmax(0,190px);
+  gap:16px;align-items:start;padding:11px 20px;position:relative;
+}
+/* The brass thread: literally the link between one hash and the next. */
+.event::before{
+  content:"";position:absolute;left:37px;top:0;bottom:0;width:1px;
+  background:var(--thread);opacity:.34;
+}
+.event:first-child::before{top:50%}
+.event:last-child::before{bottom:50%}
+.seq{
+  font-family:var(--mono);font-size:12px;color:var(--ink-faint);
+  background:var(--card);border:1px solid var(--rule);border-radius:3px;
+  width:34px;height:26px;display:grid;place-items:center;position:relative;z-index:1;
+}
+.kind{
+  font-family:var(--display);font-size:10.5px;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-faint);display:block;margin-bottom:2px;
+}
+.content{
+  font-size:15.5px;line-height:1.45;color:var(--ink);
+  border-bottom:1px dashed transparent;border-radius:2px;
+  padding:1px 3px;margin:0 -3px;outline:none;min-height:1.45em;
+}
+.content[contenteditable="true"]{border-bottom-color:var(--rule);cursor:text}
+.content[contenteditable="true"]:hover{border-bottom-color:var(--thread)}
+.content:focus-visible{
+  outline:2px solid var(--verdigris);outline-offset:3px;border-bottom-color:transparent;
+}
+.hash{
+  font-family:var(--mono);font-size:11.5px;color:var(--ink-faint);
+  text-align:right;word-break:break-all;line-height:1.5;padding-top:2px;
+}
+.event[data-state="broken"] .hash{color:var(--seal)}
+.event[data-state="broken"] .content{background:var(--seal-wash)}
+.event[data-state="downstream"] .hash{color:var(--seal);opacity:.55}
+
+/* the verdict bar — the whole product in one line */
+.verdict{
+  display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+  padding:15px 20px;border-top:1px solid var(--rule);
+  background:var(--verdigris-wash);
+  font-family:var(--display);font-size:14.5px;font-weight:600;color:var(--verdigris);
+  transition:background .18s ease,color .18s ease;
+}
+.verdict[data-ok="false"]{background:var(--seal-wash);color:var(--seal)}
+.verdict .detail{
+  font-family:var(--body);font-weight:400;font-size:15px;color:var(--ink-soft);
+}
+.verdict button{
+  margin-left:auto;font-family:var(--display);font-size:12.5px;font-weight:600;
+  letter-spacing:.05em;text-transform:uppercase;
+  background:none;border:1px solid currentColor;border-radius:3px;
+  color:inherit;padding:5px 11px;cursor:pointer;
+}
+.verdict button[hidden]{display:none}
+.verdict button:hover{background:var(--card)}
+
+/* ---- prose sections ---------------------------------------------------- */
+section{padding:64px 0;border-top:1px solid var(--rule)}
+h2.title{
+  font-family:var(--display);font-weight:700;letter-spacing:-.025em;
+  font-size:clamp(25px,3.4vw,34px);line-height:1.12;margin:14px 0 0;max-width:22ch;
+}
+.prose{max-width:62ch;color:var(--ink-soft);margin:18px 0 0}
+.prose strong{color:var(--ink);font-weight:600}
+.prose + .prose{margin-top:14px}
+
+.claims{
+  display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule);
+  border-radius:5px;overflow:hidden;margin-top:34px;
+  grid-template-columns:repeat(auto-fit,minmax(248px,1fr));
+}
+.claim{background:var(--card);padding:22px}
+.claim h3{
+  font-family:var(--display);font-size:15.5px;font-weight:600;letter-spacing:-.01em;
+  margin:10px 0 8px;color:var(--ink);
+}
+.claim p{margin:0;font-size:15px;color:var(--ink-soft);line-height:1.55}
+
+/* ---- install ----------------------------------------------------------- */
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-top:26px}
+.tabs button{
+  font-family:var(--display);font-size:13px;font-weight:600;
+  background:var(--card);border:1px solid var(--rule);border-radius:3px;
+  color:var(--ink-soft);padding:7px 14px;cursor:pointer;
+}
+.tabs button[aria-selected="true"]{
+  color:var(--card);background:var(--ink);border-color:var(--ink);
+}
+.tabs button:focus-visible{outline:2px solid var(--verdigris);outline-offset:2px}
+pre{
+  margin:14px 0 0;background:var(--card);border:1px solid var(--rule);
+  border-radius:5px;padding:20px;overflow-x:auto;
+  font-family:var(--mono);font-size:13.5px;line-height:1.7;color:var(--ink);
+}
+pre .c{color:var(--ink-faint)}
+pre .k{color:var(--verdigris)}
+pre[hidden]{display:none}
+
+/* ---- conformance ------------------------------------------------------- */
+table{border-collapse:collapse;width:100%;margin-top:26px;font-family:var(--mono);font-size:13.5px}
+th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--rule)}
+th{
+  font-family:var(--display);font-size:11px;font-weight:600;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--ink-faint);
+}
+td.pass{color:var(--verdigris);font-weight:500}
+td.detail{color:var(--ink-faint)}
+
+footer{border-top:1px solid var(--rule);padding:36px 0 52px;color:var(--ink-faint);font-size:14.5px}
+.foot{display:flex;gap:26px;flex-wrap:wrap;align-items:center}
+.foot a{color:var(--ink-soft);text-decoration:none;border-bottom:1px solid var(--rule)}
+.foot a:hover{color:var(--ink);border-bottom-color:var(--thread)}
+.foot .sp{margin-left:auto}
+
+@media (max-width:720px){
+  .event{grid-template-columns:40px 1fr;gap:12px}
+  .hash{grid-column:2;text-align:left;font-size:11px}
+  .event::before{left:31px}
+  .hint{display:none}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap bar">
+    <a class="mark" href="/">Tide<span>line</span></a>
+    <nav>
+      <a href="#how">How it works</a>
+      <a href="#install">Install</a>
+      <a href="/oversight">Demo</a>
+      <a href="https://github.com/dylanp12/tideline/blob/main/spec/tlr-1.md">Spec</a>
+      <a href="https://github.com/dylanp12/tideline">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap">
+  <div class="hero">
+    <span class="stamp">TLR/1 &nbsp;·&nbsp; open protocol</span>
+    <h1>A record of what your agents did, that <em>anyone</em> can verify.</h1>
+    <p class="lede">
+      Every model call, tool call and human decision, chained so that altering one
+      of them is detectable by someone who does not trust the server that served
+      it. Open protocol. Four SDKs. Self-hostable.
+    </p>
+  </div>
+
+  <!-- The signature element. Real canon, real SHA-256, computed in your browser.
+       Break a byte and watch the chain say exactly which event you touched. -->
+  <div class="chain">
+    <div class="chain-head">
+      <h2>Loan application · run loan-4821</h2>
+      <p class="hint">Edit any line, then press <kbd>Tab</kbd></p>
+    </div>
+
+    <ol class="events" id="events"></ol>
+
+    <div class="verdict" id="verdict" data-ok="true">
+      <span id="verdictText">Verifying…</span>
+      <span class="detail" id="verdictDetail"></span>
+      <button id="restore" type="button" hidden>Restore</button>
+    </div>
+  </div>
+</div>
+
+<section id="how">
+  <div class="wrap">
+    <span class="stamp">EU AI Act &nbsp;·&nbsp; Articles 12 &amp; 14</span>
+    <h2 class="title">Records cannot be backfilled.</h2>
+    <p class="prose">
+      Annex III high-risk obligations — record-keeping and human oversight — apply
+      from <strong>2 December 2027</strong>, with breaches reaching €15M or 3% of
+      worldwide turnover. The deadline is not the hard part. The hard part is that
+      a decision your agent makes today is provable in 2027 only if it was
+      recorded today.
+    </p>
+    <p class="prose">
+      Observability tools are trace viewers for developers debugging, not evidence
+      for someone who does not trust you. Governance platforms sit at the policy
+      layer and never see what the agent actually did. Platform-native tracing is
+      single-vendor by design. Tideline is the one that is vendor-neutral, in the
+      execution path, and independently verifiable.
+    </p>
+
+    <div class="claims">
+      <div class="claim">
+        <span class="stamp">Integrity</span>
+        <h3>Alteration is detectable</h3>
+        <p>Each event commits to the one before it. Change a field and verification
+           fails, naming the event — as it does above.</p>
+      </div>
+      <div class="claim">
+        <span class="stamp">Article 14</span>
+        <h3>Oversight lives in the record</h3>
+        <p>An approval gate is two events in the chain, not a table beside it, so
+           the oversight trail cannot drift out of step with the record.</p>
+      </div>
+      <div class="claim">
+        <span class="stamp">GDPR Art 17</span>
+        <h3>Erasure keeps the evidence</h3>
+        <p>The chain commits to each field by digest. Erase a value and the digest
+           stays, so the record still verifies. Retention and erasure stop being
+           mutually exclusive.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <span class="stamp">npm &nbsp;·&nbsp; PyPI &nbsp;·&nbsp; crates.io &nbsp;·&nbsp; Go</span>
+    <h2 class="title">Record a run, gate the risky part, verify the result.</h2>
+    <p class="prose">
+      The same shape in every language, so examples translate line for line. The
+      call that matters is <code>gate</code>: it does not return until a person
+      decides, and by then the request and the decision are both on the record.
+    </p>
+
+    <div class="tabs" role="tablist" aria-label="Language">
+      <button role="tab" id="t-ts" aria-controls="p-ts" aria-selected="true">TypeScript</button>
+      <button role="tab" id="t-py" aria-controls="p-py" aria-selected="false">Python</button>
+      <button role="tab" id="t-rs" aria-controls="p-rs" aria-selected="false">Rust</button>
+      <button role="tab" id="t-go" aria-controls="p-go" aria-selected="false">Go</button>
+    </div>
+
+<pre id="p-ts" role="tabpanel" aria-labelledby="t-ts"><span class="c">// npm install @tideline/sdk</span>
+<span class="k">const</span> run = <span class="k">await</span> tl.startRun({
+  runId: <span class="k">"loan-4821"</span>,
+  agent: { name: <span class="k">"underwriter"</span>, version: <span class="k">"2.1.0"</span> },
+});
+
+<span class="k">await</span> run.record({ kind: <span class="k">"tool_call"</span>, name: <span class="k">"pull_credit_report"</span> });
+
+<span class="c">// Waits for a person. Both halves are on the record by now.</span>
+<span class="k">const</span> decision = <span class="k">await</span> run.gate({ action: <span class="k">"Approve EUR40,000 loan"</span> });
+<span class="k">if</span> (decision.approved) <span class="k">await</span> run.complete();
+
+<span class="k">const</span> { chain } = <span class="k">await</span> run.verifiedEvents();</pre>
+
+<pre id="p-py" role="tabpanel" aria-labelledby="t-py" hidden><span class="c"># pip install tideline</span>
+run = tl.start_run(<span class="k">"loan-4821"</span>, <span class="k">"underwriter"</span>, <span class="k">"2.1.0"</span>)
+
+run.record(<span class="k">"tool_call"</span>, name=<span class="k">"pull_credit_report"</span>)
+
+<span class="c"># Waits for a person. Both halves are on the record by now.</span>
+decision = run.gate(<span class="k">"Approve EUR40,000 loan"</span>, expires_in=<span class="k">7200</span>)
+<span class="k">if</span> decision.approved:
+    run.complete()
+
+events, chain = run.verified_events()</pre>
+
+<pre id="p-rs" role="tabpanel" aria-labelledby="t-rs" hidden><span class="c">// cargo add tideline-sdk</span>
+<span class="k">let</span> run = tl.start_run(<span class="k">"loan-4821"</span>, Agent::new(<span class="k">"underwriter"</span>, <span class="k">"2.1.0"</span>))
+    .send().<span class="k">await</span>?;
+
+run.record(NewEvent::tool_call(<span class="k">"pull_credit_report"</span>)).<span class="k">await</span>?;
+
+<span class="c">// Waits for a person. Both halves are on the record by now.</span>
+<span class="k">let</span> decision = run.gate(<span class="k">"Approve EUR40,000 loan"</span>, Duration::from_secs(<span class="k">7200</span>)).<span class="k">await</span>?;
+<span class="k">if</span> decision.is_approved() { run.complete().<span class="k">await</span>?; }
+
+<span class="k">let</span> events = run.verified_events().<span class="k">await</span>?;</pre>
+
+<pre id="p-go" role="tabpanel" aria-labelledby="t-go" hidden><span class="c">// go get github.com/dylanp12/tideline/sdk/go</span>
+run, _ := tl.StartRun(ctx, tideline.NewRun{
+    RunID: <span class="k">"loan-4821"</span>,
+    Agent: tideline.Agent{Name: <span class="k">"underwriter"</span>, Version: <span class="k">"2.1.0"</span>},
+})
+
+run.Record(ctx, tideline.NewEvent{Kind: tideline.ToolCall, Name: <span class="k">"pull_credit_report"</span>})
+
+<span class="c">// Waits for a person. Both halves are on the record by now.</span>
+decision, _ := run.Gate(ctx, <span class="k">"Approve EUR40,000 loan"</span>, <span class="k">2</span>*time.Hour)
+<span class="k">if</span> decision.Approved() { run.Complete(ctx) }
+
+events, chain, _ := run.VerifiedEvents(ctx)</pre>
+
+    <p class="prose" style="margin-top:26px">
+      To check a record without a server in the picture:
+      <code>cargo install tideline-cli --no-default-features</code> builds a
+      binary that cannot open a socket, which is what you want when the thing
+      being audited is the server you would otherwise be talking to.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="stamp">Conformance</span>
+    <h2 class="title">Four implementations, held to the same bytes.</h2>
+    <p class="prose">
+      The protocol is specified separately from this implementation, and every
+      SDK is tested against one frozen corpus and one HTTP transcript. A change
+      that one language gets wrong fails the build rather than someone's
+      production record.
+    </p>
+    <table>
+      <thead><tr><th>Surface</th><th>Result</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr><td>independent</td><td class="pass">PASS</td><td class="detail">8 vectors</td></tr>
+        <tr><td>rust</td><td class="pass">PASS</td><td class="detail">161 tests</td></tr>
+        <tr><td>typescript</td><td class="pass">PASS</td><td class="detail">45 tests</td></tr>
+        <tr><td>python</td><td class="pass">PASS</td><td class="detail">44 tests</td></tr>
+        <tr><td>go</td><td class="pass">PASS</td><td class="detail">32 tests</td></tr>
+      </tbody>
+    </table>
+    <p class="prose">
+      <strong>independent</strong> is a second implementation of the canonical form
+      that shares no code with any SDK. Without it, replaying the corpus would only
+      prove the code agrees with itself.
+    </p>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <a href="https://github.com/dylanp12/tideline">GitHub</a>
+    <a href="https://github.com/dylanp12/tideline/blob/main/spec/tlr-1.md">TLR/1 specification</a>
+    <a href="https://github.com/dylanp12/tideline/tree/main/conformance">Conformance suite</a>
+    <a href="/oversight">Demo</a>
+    <span class="sp">MIT or Apache-2.0</span>
+  </div>
+</footer>
+
+<script type="module">
+// The chain on this page is not a mock-up. Canon is built exactly as
+// spec/tlr-1.md §4.1 describes it and hashed with the browser's own SHA-256,
+// so editing a line really does invalidate a real hash chain.
+
+const RECORD = [
+  { kind:"run_started", ts:1757635200000, label:"Run opened",
+    text:"underwriter-agent 2.1.0 · applicant-4821", editable:false,
+    metadata:'{"run_id":"loan-4821","agent":{"name":"underwriter-agent","version":"2.1.0"}}' },
+  { kind:"message", ts:1757635201000, role:"user",
+    text:"Applicant #4821 requests a EUR40,000 personal loan; credit score 690, DTI 38%" },
+  { kind:"tool_call", ts:1757635202000, role:"tool", name:"pull_credit_report",
+    text:"score=690 utilisation=42% delinquencies=0", metadata:'{"bureau":"experian"}' },
+  { kind:"model_call", ts:1757635203000, role:"assistant", name:"underwriter-agent",
+    text:"Above the EUR25k auto-approve ceiling. Recommend approval with human sign-off." },
+  { kind:"decision", ts:1757635204000, name:"approval_requested",
+    text:"Approve EUR40,000 loan for applicant #4821", editable:false,
+    metadata:'{"action":"Approve EUR40,000 loan","expires_at":1757642404000}' },
+  { kind:"decision", ts:1757635260000, name:"approval_resolved",
+    text:"Approved by Jane Okafor (Credit Risk) — income verified, DTI within policy",
+    editable:false, metadata:'{"target_seq":4,"decision":"approved","attested":false}' },
+  { kind:"run_finished", ts:1757635261000, label:"Run sealed",
+    text:"7 events", editable:false, metadata:'{"event_count":7}' },
+];
+
+const enc = new TextEncoder();
+const ZERO = new Uint8Array(32);
+
+async function sha(bytes){ return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)); }
+async function shaText(s){ return sha(enc.encode(s)); }
+const hex = b => [...b].map(x => x.toString(16).padStart(2,"0")).join("");
+
+function u64be(n){
+  const out = new Uint8Array(8), view = new DataView(out.buffer);
+  view.setUint32(0, Math.floor(n / 0x100000000));
+  view.setUint32(4, n % 0x100000000);
+  return out;
+}
+
+// 181 bytes: "tlr1\n", seq, ts, then five field digests.
+async function canon(e, seq){
+  const parts = [
+    enc.encode("tlr1\n"), u64be(seq), u64be(e.ts),
+    await shaText(e.kind),
+    e.role    ? await shaText(e.role)    : ZERO,
+    e.name    ? await shaText(e.name)    : ZERO,
+    e.text    ? await shaText(e.text)    : ZERO,
+    e.metadata? await shaText(e.metadata): ZERO,
+  ];
+  const out = new Uint8Array(181);
+  let at = 0;
+  for (const p of parts){ out.set(p, at); at += p.length; }
+  return out;
+}
+
+async function hashEvent(e, seq, prev){
+  const c = await canon(e, seq);
+  const joined = new Uint8Array(181 + 32);
+  joined.set(c, 0); joined.set(prev, 181);
+  return sha(joined);
+}
+
+const list      = document.getElementById("events");
+const verdict   = document.getElementById("verdict");
+const vText     = document.getElementById("verdictText");
+const vDetail   = document.getElementById("verdictDetail");
+const restoreEl = document.getElementById("restore");
+
+// The hashes the server issued. Recomputing against these is what makes an
+// edit detectable — exactly what a verifier does with a record it is handed.
+let issued = [];
+
+function render(){
+  list.innerHTML = "";
+  RECORD.forEach((e, seq) => {
+    const li = document.createElement("li");
+    li.className = "event";
+    li.dataset.seq = seq;
+
+    const editable = e.editable !== false;
+    li.innerHTML = `
+      <span class="seq" aria-hidden="true">${seq}</span>
+      <span>
+        <span class="kind">${e.label ?? (e.name ? `${e.kind} · ${e.name}` : e.kind)}</span>
+        <span class="content" data-seq="${seq}"
+              ${editable ? 'contenteditable="plaintext-only" role="textbox" tabindex="0"' : ""}
+              aria-label="${editable ? `Event ${seq} content, editable` : `Event ${seq} content`}"
+        >${e.text.replace(/</g,"&lt;")}</span>
+      </span>
+      <span class="hash" data-hash="${seq}">…</span>`;
+    list.appendChild(li);
+  });
+}
+
+async function computeIssued(){
+  issued = [];
+  let prev = ZERO;
+  for (let i = 0; i < RECORD.length; i++){
+    prev = await hashEvent(RECORD[i], i, prev);
+    issued.push(prev);
+  }
+}
+
+async function verify(){
+  let prev = ZERO, firstBad = -1;
+  for (let i = 0; i < RECORD.length; i++){
+    const computed = await hashEvent(RECORD[i], i, prev);
+    const ok = hex(computed) === hex(issued[i]);
+    const row  = list.querySelector(`.event[data-seq="${i}"]`);
+    const cell = list.querySelector(`[data-hash="${i}"]`);
+    cell.textContent = hex(issued[i]).slice(0, 24) + "…";
+
+    if (!ok && firstBad === -1) firstBad = i;
+    // A verifier walks the chain it was given, so the first break is the one
+    // worth naming and everything after it is collateral.
+    row.dataset.state = ok ? "ok" : (firstBad === i ? "broken" : "downstream");
+    prev = issued[i];
+  }
+
+  if (firstBad === -1){
+    verdict.dataset.ok = "true";
+    vText.textContent = `${RECORD.length} events verified`;
+    vDetail.textContent = `head ${hex(issued.at(-1)).slice(0,16)}… · sealed`;
+    restoreEl.hidden = true;
+  } else {
+    verdict.dataset.ok = "false";
+    vText.textContent = `Event ${firstBad} was altered`;
+    vDetail.textContent = "Its contents no longer match the hash recorded for it.";
+    restoreEl.hidden = false;
+  }
+}
+
+const ORIGINAL = RECORD.map(e => e.text);
+
+function wire(){
+  list.addEventListener("input", ev => {
+    const el = ev.target.closest(".content[contenteditable]");
+    if (!el) return;
+    RECORD[+el.dataset.seq].text = el.textContent;
+    verify();
+  });
+  // Enter should not insert a line break into a single-line field.
+  list.addEventListener("keydown", ev => {
+    if (ev.key === "Enter" && ev.target.closest(".content[contenteditable]")){
+      ev.preventDefault(); ev.target.blur();
+    }
+  });
+  restoreEl.addEventListener("click", () => {
+    RECORD.forEach((e, i) => { e.text = ORIGINAL[i]; });
+    render(); verify();
+    list.querySelector('.content[contenteditable]')?.focus();
+  });
+
+  document.querySelectorAll('[role="tab"]').forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll('[role="tab"]').forEach(t => {
+        const on = t === tab;
+        t.setAttribute("aria-selected", String(on));
+        document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+      });
+    });
+  });
+}
+
+render();
+wire();
+if (window.crypto?.subtle){
+  computeIssued().then(verify);
+} else {
+  // Without SubtleCrypto the chain is still readable; it just cannot be checked
+  // here. Saying so is better than showing a green tick we did not earn.
+  verdict.dataset.ok = "true";
+  vText.textContent = "7 events";
+  vDetail.textContent = "This browser cannot verify in page — run tideline verify instead.";
+}
+</script>
+</body>
+</html>

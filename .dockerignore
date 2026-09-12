@@ -1,0 +1,18 @@
+# Keep the build context to what the Dockerfile actually COPYs. Without this it
+# includes target/ (multiple gigabytes) and sdk/ts/node_modules, which makes
+# every build slow for no reason.
+target
+**/node_modules
+**/dist
+**/__pycache__
+.git
+site
+demo
+docs
+spec
+conformance
+sdk
+video
+launch
+scripts
+*.md
