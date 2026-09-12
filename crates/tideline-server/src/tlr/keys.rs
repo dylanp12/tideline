@@ -44,38 +44,96 @@ impl SigningKeyring {
         B64.encode(self.key.to_bytes())
     }
 
-    /// Load `TIDELINE_CHECKPOINT_KEY`, or generate an ephemeral key and say so.
+    /// Load the signing key: from the environment, else from a key file, else
+    /// generate one and persist it.
+    ///
+    /// A key that changes on restart is nearly as bad as none: every checkpoint
+    /// signed before the restart becomes unverifiable, so truncation protection
+    /// lapses on every deploy. Persisting a generated key next to the records
+    /// keeps it verifiable. That does mean whoever can read the records can also
+    /// sign them, which is precisely why a deployment whose threat model includes
+    /// its own operator anchors checkpoints externally rather than relying on
+    /// this key alone.
     pub fn from_env() -> Self {
-        match std::env::var("TIDELINE_CHECKPOINT_KEY")
+        if let Some(seed) = std::env::var("TIDELINE_CHECKPOINT_KEY")
             .ok()
             .filter(|s| !s.is_empty())
         {
-            Some(seed) => match Self::from_seed_b64(&seed) {
+            return match Self::from_seed_b64(&seed) {
                 Some(k) => {
-                    tracing::info!(key_id = %k.key_id(), "checkpoint key loaded");
+                    tracing::info!(key_id = %k.key_id(), "checkpoint key loaded from the environment");
                     k
                 }
                 None => {
                     tracing::error!(
-                        "TIDELINE_CHECKPOINT_KEY is not base64 of a 32-byte seed; \
-                         generating an ephemeral key instead"
+                        "TIDELINE_CHECKPOINT_KEY is not base64 of a 32-byte seed — falling \
+                         back to a key file"
                     );
-                    Self::generate()
+                    Self::from_file_or_generate()
                 }
-            },
-            None => {
-                let k = Self::generate();
-                tracing::warn!(
-                    key_id = %k.key_id(),
-                    seed = %k.to_seed_b64(),
-                    "no TIDELINE_CHECKPOINT_KEY set — generated an ephemeral one. \
-                     Checkpoints signed with it cannot be verified after a restart, \
-                     so truncation protection lapses across deploys. Set this seed \
-                     in the environment to keep it."
-                );
-                k
-            }
+            };
         }
+        Self::from_file_or_generate()
+    }
+
+    /// The key file: `TIDELINE_CHECKPOINT_KEY_FILE`, else beside the record
+    /// database, so it persists with the volume that holds what it signs.
+    fn key_path() -> Option<std::path::PathBuf> {
+        if let Some(p) = std::env::var("TIDELINE_CHECKPOINT_KEY_FILE")
+            .ok()
+            .filter(|s| !s.is_empty())
+        {
+            return Some(std::path::PathBuf::from(p));
+        }
+        let db = std::env::var("TIDELINE_RECORD_DB")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        Some(std::path::Path::new(&db).with_extension("signing-key"))
+    }
+
+    fn from_file_or_generate() -> Self {
+        let Some(path) = Self::key_path() else {
+            let k = Self::generate();
+            tracing::warn!(
+                key_id = %k.key_id(),
+                seed = %k.to_seed_b64(),
+                "no checkpoint key and nowhere to keep one (records are in memory) — \
+                 generated an ephemeral key. Checkpoints signed with it cannot be \
+                 verified after a restart."
+            );
+            return k;
+        };
+
+        if let Ok(seed) = std::fs::read_to_string(&path) {
+            if let Some(k) = Self::from_seed_b64(seed.trim()) {
+                tracing::info!(key_id = %k.key_id(), path = %path.display(), "checkpoint key loaded");
+                return k;
+            }
+            tracing::error!(
+                path = %path.display(),
+                "the checkpoint key file is not base64 of a 32-byte seed — refusing to \
+                 overwrite it. Fix or remove it; generating a new key here would \
+                 invalidate every checkpoint already signed."
+            );
+            std::process::exit(1);
+        }
+
+        let k = Self::generate();
+        match write_private(&path, &k.to_seed_b64()) {
+            Ok(()) => tracing::info!(
+                key_id = %k.key_id(),
+                path = %path.display(),
+                "generated a checkpoint key and saved it (mode 0600)"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                key_id = %k.key_id(),
+                "generated a checkpoint key but could not save it, so it will change on \
+                 restart and checkpoints signed now will not verify afterwards"
+            ),
+        }
+        k
     }
 
     pub fn key_id(&self) -> &str {
@@ -104,6 +162,20 @@ impl SigningKeyring {
             }],
         })
     }
+}
+
+/// Write a secret, readable only by its owner.
+fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    writeln!(file, "{contents}")
 }
 
 #[cfg(test)]
@@ -138,6 +210,37 @@ mod tests {
     #[test]
     fn a_malformed_seed_is_rejected() {
         assert!(SigningKeyring::from_seed_b64("nonsense").is_none());
+    }
+
+    #[test]
+    fn a_key_persists_across_reloads() {
+        // A key that changes on restart invalidates every checkpoint signed
+        // before it, so truncation protection would lapse on every deploy.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tideline.signing-key");
+        std::env::set_var("TIDELINE_CHECKPOINT_KEY_FILE", &path);
+        std::env::remove_var("TIDELINE_CHECKPOINT_KEY");
+
+        let first = SigningKeyring::from_env();
+        assert!(path.exists(), "the key should have been saved");
+        let second = SigningKeyring::from_env();
+        assert_eq!(first.key_id(), second.key_id());
+
+        // And a checkpoint signed by the first still verifies under the second.
+        let cp = first.sign_head("r1", 3, Hash::of(b"head"), 1);
+        assert!(cp.verify(&second.public()).is_ok());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(
+                mode & 0o777,
+                0o600,
+                "a signing key must not be world-readable"
+            );
+        }
+        std::env::remove_var("TIDELINE_CHECKPOINT_KEY_FILE");
     }
 
     #[test]

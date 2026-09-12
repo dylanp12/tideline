@@ -208,9 +208,13 @@ See [`docs/streaming.md`](docs/streaming.md).
   `TIDELINE_REDIS_URL` set, the server refuses to start unless records are
   explicitly single-writer, because a load balancer would otherwise split every
   run across instances.
-- **Checkpoints** — set `TIDELINE_CHECKPOINT_KEY` to the base64 Ed25519 seed.
-  Without one the server generates an ephemeral key and says so: checkpoints
-  signed with it cannot be verified after a restart.
+- **Checkpoints** — the signing key comes from `TIDELINE_CHECKPOINT_KEY` (base64
+  of a 32-byte Ed25519 seed), or from a key file beside the record database,
+  which the server creates at mode 0600 on first run. Either way it survives a
+  restart, because a key that changes invalidates every checkpoint signed before
+  it. Whoever can read the records can also sign them, so a deployment whose
+  threat model includes its own operator anchors checkpoints externally rather
+  than relying on this key alone.
 - **Observability** — `GET /metrics` (Prometheus) covers runs, appends, append
   failures, gates by decision, redactions, and checkpoint age. Structured logs
   via `RUST_LOG`, JSON with `TIDELINE_LOG_FORMAT=json`.

@@ -40,8 +40,12 @@ They must not carry personal data.
 - Set `TIDELINE_PUBLISH_TOKEN`, or `TIDELINE_AUTH_URL`, before exposing a server.
   Record reads fall open only when nothing at all is configured, and the server
   warns at startup when it is running that way.
-- Set `TIDELINE_CHECKPOINT_KEY`. Without it the server generates an ephemeral key
-  and warns: checkpoints signed with it cannot be verified after a restart.
+- The checkpoint signing key persists: from `TIDELINE_CHECKPOINT_KEY`, or a key
+  file beside the record database created at mode 0600. Set the environment
+  variable if you want it held somewhere else, such as a secret manager. Note
+  that a key stored beside the records is readable by anyone who can read them,
+  which is why external anchoring — not this key — is what protects against the
+  operator.
 - Do not run with `TIDELINE_REDIS_URL` and local record storage behind a load
   balancer. The server refuses to start in that configuration, because each
   instance would hold a fragment of every run.
