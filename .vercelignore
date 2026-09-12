@@ -1,0 +1,20 @@
+# Ship only the static landing page (site/) to Vercel — exclude the Rust engine.
+target
+crates
+conformance
+spec
+sdk
+demo
+docs
+Cargo.toml
+Cargo.lock
+Dockerfile
+fly.toml
+LICENSE-MIT
+LICENSE-APACHE
+README.md
+.gitignore
+.github
+cloud
+video
+launch

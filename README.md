@@ -1,177 +1,235 @@
 # Tideline
 
 [![CI](https://github.com/dylanp12/tideline/actions/workflows/ci.yml/badge.svg)](https://github.com/dylanp12/tideline/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/tideline-proto.svg)](https://crates.io/crates/tideline-proto)
+[![npm](https://img.shields.io/npm/v/@tideline/sdk.svg)](https://www.npmjs.com/package/@tideline/sdk)
+[![PyPI](https://img.shields.io/pypi/v/tideline.svg)](https://pypi.org/project/tideline/)
 
-**Reliable streaming for AI output.** Tideline is a tiny, self-hostable server that streams LLM/agent output to any number of clients — and handles the parts that break at scale: resume after disconnect, fan-out to many viewers, replay for late joiners, and slow-client isolation. Open source, written in Rust.
+**A record of what your AI agents did, that anyone can verify without trusting you.**
 
-> Status: early but hardened — SSE, single binary, with auth, lifecycle reaping, limits, and Prometheus metrics. Runs in-memory by default, or **Redis-backed for horizontal scale** across many instances.
+Tideline is an open protocol and a reference implementation for the durable,
+tamper-evident record of an agent run, and for the human-approval gates over it.
+Official SDKs in TypeScript, Python, Rust, and Go. Self-hostable, Apache-2.0 and
+MIT, written in Rust.
 
-![Tideline resuming a dropped stream](demo/tideline.gif)
+```console
+$ tideline verify evidence.json
+8 events verified
+head      1711f9a6737029f6…f96f53e885952 (seq 7)
+sealed    yes
+```
 
-*A real capture: tokens stream live over SSE, the connection drops mid-answer at offset 4, and a reconnect with `Last-Event-ID` resumes exactly — no gap, no repeat.*
+No server. No credentials. No network. That is the point.
 
 ## Why
 
-Every app shipping AI features streams tokens to users. At real scale it breaks in predictable ways:
+Enterprises are putting autonomous agents into production faster than they can
+govern them, and in regulated industries that collides with law. Under the EU AI
+Act, Annex III high-risk obligations — **Article 12** (record-keeping) and
+**Article 14** (human oversight) — apply from **2 December 2027**, postponed from
+August 2026 by the Digital Omnibus adopted in June 2026. Breaches reach **€15M or
+3% of worldwide turnover** (Art 99(4)).
 
-- a network blip drops half a long answer, with no clean resume;
-- you can't cheaply stream **one** generation to **many** viewers;
-- a slow client stalls everyone;
-- someone opening the link late can't catch up.
+The part that sets the timetable is not the deadline. It is that **records cannot
+be backfilled**. A decision an agent makes today is provable in 2027 only if it
+was recorded today.
 
-Raw SSE and low-level platform primitives (Cloudflare Durable Objects, API Gateway WebSockets) give you a pipe — you build resume, fan-out, replay, and backpressure yourself. The hosted real-time vendors (Pusher, Ably, PubNub) are generic and priced punishingly per connection. Tideline does exactly one thing: make AI output streaming reliable.
+What exists does not fit:
+
+- **Observability tools** are post-hoc trace viewers built for developers
+  debugging. They are not evidence, and they are not designed to be read by
+  someone who does not trust the vendor.
+- **GRC platforms** sit at the policy layer — risk registers, model cards — and
+  never see the agent's actual inputs, outputs, or decisions.
+- **Platform-native tracing** (Vercel, Cloudflare, the model vendors) is
+  excellent and single-vendor by design. A team running agents across several
+  models and frameworks has no one pane, and the platforms have no reason to
+  build one.
+
+Tideline occupies the position none of them do: **vendor-neutral, in the
+execution path, and independently verifiable**.
+
+## The idea
+
+A run is an append-only chain. Each event commits to the one before it, so
+altering any of them is detectable by anyone holding the record — including
+someone who does not trust the server that served it.
+
+```
+run_started ─► message ─► tool_call ─► approval_requested ─► approval_resolved ─► decision ─► run_finished
+     │            │           │                │                    │                │            │
+   hash₀ ────►  hash₁ ────► hash₂ ────────►  hash₃ ──────────────► hash₄ ────────► hash₅ ────► hash₆
+```
+
+Three properties follow, and each one is a test in this repository:
+
+**Alteration is detectable.** Change any field of any event and verification
+fails, naming the event.
+
+**Oversight lives inside the record.** An approval gate is two events in the
+chain, not a table beside it, so the Article 14 trail cannot drift out of step
+with the Article 12 record.
+
+**Erasure does not destroy evidence.** Canon commits to each field by digest, so
+honouring a GDPR Article 17 request erases the value, keeps the digest, and the
+chain still verifies. Retention and erasure stop being mutually exclusive.
+
+A hash chain cannot detect a *truncated* tail — a valid prefix is a valid chain —
+so the server signs periodic checkpoints, and the tooling says plainly when a
+record is unsealed and uncheckpointed rather than implying more than it knows.
 
 ## Quickstart
 
 ```bash
-cargo run   # listens on :8080
+cargo install tideline-server && tideline-server     # listens on :8080
 ```
+
+```ts
+import { Tideline } from "@tideline/sdk";
+
+const tl  = new Tideline({ url: "http://localhost:8080" });
+const run = await tl.startRun({
+  runId: "loan-4821",
+  agent: { name: "underwriter", version: "2.1.0" },
+  subjectRef: "applicant-4821",          // opaque; never personal data
+  labels: { product: "personal-loan", jurisdiction: "IE" },
+});
+
+await run.record({
+  kind: "tool_call",
+  name: "pull_credit_report",
+  content: "score=690 utilisation=42%",
+  metadata: { bureau: "experian", ms: 410 },
+});
+
+// Does not return until a person decides. By then the request and the decision
+// are both in the chain.
+const decision = await run.gate({
+  action: "Approve EUR40,000 loan for applicant #4821",
+  expiresIn: 7200,
+});
+
+if (decision.approved) {
+  await run.record({ kind: "decision", name: "loan_approved", content: "EUR40,000" });
+}
+await run.complete();
+```
+
+See the whole arc, including verification, in one command:
 
 ```bash
-# your backend publishes chunks as the model generates
-curl -XPOST localhost:8080/streams/demo --data 'Hello '
-curl -XPOST localhost:8080/streams/demo --data 'world'
-curl -XPOST localhost:8080/streams/demo/complete
-
-# any client reads the whole stream over SSE
-curl -N localhost:8080/streams/demo
-# id: 0
-# data: Hello
-#
-# id: 1
-# data: world
-#
-# event: done
-
-# reconnect and resume — Last-Event-ID skips what you already saw
-curl -N -H 'Last-Event-ID: 0' localhost:8080/streams/demo
-# id: 1
-# data: world
-# event: done
+./demo/oversight-demo.sh
 ```
 
-Because it's SSE with the offset in each `id:` field, browsers resume automatically on reconnect — no client code required.
+## SDKs
 
-**In React** — resumable streaming in a few lines (the zero-dependency client lives in [`sdk/`](sdk/); copy it into your app or vendor the two files):
+| Language | Install | Source |
+| --- | --- | --- |
+| TypeScript | `npm install @tideline/sdk` | [`sdk/ts`](sdk/ts) |
+| Python | `pip install tideline` | [`sdk/python`](sdk/python) |
+| Rust | `cargo add tideline-sdk` | [`crates/tideline-sdk`](crates/tideline-sdk) |
+| Go | `go get github.com/dylanp12/tideline/sdk/go` | [`sdk/go`](sdk/go) |
+| CLI | `cargo install tideline-cli` | [`crates/tideline-cli`](crates/tideline-cli) |
 
-```jsx
-import { useStream } from "./sdk/react.js";
+All four expose the same shape, so examples translate line for line, and all
+four are held to the same bytes by [`conformance/`](conformance).
 
-function Answer({ id }) {
-  const { text, status, reconnects } = useStream("http://localhost:8080", id);
-  // status: connecting | streaming | reconnecting | done | error
-  return <p data-status={status}>{text}</p>;
-}
+For verification alone — an auditor checking an export, with no server in the
+picture — use [`tideline-proto`](crates/tideline-proto), which performs no I/O,
+or `cargo install tideline-cli --no-default-features`, which produces a binary
+that cannot open a socket.
+
+## The protocol
+
+**[TLR/1](spec/tlr-1.md)** is specified independently of this implementation, so
+a record produced here can be verified anywhere, and someone else can implement
+it. Conformance is machine-checkable, not a claim:
+
+```console
+$ ./conformance/run-all.sh
+surface        result detail
+independent    PASS    8 vectors
+rust           PASS  161 tests
+ts             PASS   45 tests
+python         PASS   44 tests
+go             PASS   32 tests
+
+Every surface agrees on the same bytes.
 ```
 
-## The five hard parts
-
-- **Resumable** — reconnect with `Last-Event-ID` and resume exactly where you left off; no lost or duplicated tokens.
-- **Fan-out** — one generation, many subscribers. Publish once, deliver to N.
-- **Replay / late-join** — join mid-stream or after; get the buffered history, then live.
-- **Slow-client isolation** — a slow consumer can't stall the generation or other clients.
-- **Dead-simple** — `POST` tokens in, read SSE out. JS/TS SDK + a React `useStream` hook included.
-
-## How it compares
-
-|                                   | raw SSE     | Durable Objects | Pusher/Ably | **Tideline** |
-| --------------------------------- | ----------- | --------------- | ----------- | --------- |
-| resume after disconnect           | build it    | build it        | partial     | ✓         |
-| fan-out one→many                  | ✗           | build it        | ✓           | ✓         |
-| replay / late-join                | ✗           | build it        | partial     | ✓         |
-| self-host, no per-connection bill | ✓           | platform        | ✗           | ✓         |
-| AI-streaming-shaped               | ✗           | ✗               | ✗           | ✓         |
-
-## Benchmarks
-
-One generation fanned out to many concurrent SSE clients — single core, in-process, **100% delivery**:
-
-| subscribers | tokens | events delivered | time   | throughput  |
-| ----------- | ------ | ---------------- | ------ | ----------- |
-| 1,000       | 100    | 100,000          | 0.10 s | ~950k ev/s  |
-| 5,000       | 100    | 500,000          | 0.96 s | ~520k ev/s  |
-| 10,000      | 50     | 500,000          | 1.17 s | ~430k ev/s  |
-
-Reproduce: `cargo run --release --example loadtest -- 10000 50` (loopback on one box — treat it as a floor, not a cloud number).
-
-## Production
-
-Tideline is built to be exposed, not just demoed:
-
-- **Auth** — set `TIDELINE_PUBLISH_TOKEN` to require `Authorization: Bearer <token>` on all writes (publish / complete / error / delete). Optionally set `TIDELINE_SUBSCRIBE_TOKEN` to gate reads too, or `TIDELINE_AUTH_URL` to have your own backend verify producer keys (answers are cached). Unset = open (dev mode), with a startup warning.
-- **Private streams** — mark a stream private with `?private=1`; reads then require a short-lived, HMAC-signed ticket, so it isn't readable by anyone who guesses the id. Enforced across instances on the Redis backend.
-- **Lifecycle** — a background reaper evicts idle streams (default 30 min) and completed streams (default 5 min), with LRU eviction past a `max_streams` cap, so the registry never grows unbounded. `DELETE /streams/:id` removes one explicitly.
-- **Limits** — bounded per-stream replay buffer, 256 KB max publish body, validated stream IDs, and a max-subscribers-per-stream cap.
-- **Observability** — `GET /metrics` (Prometheus): active streams, subscribers, buffered tokens, publishes, gaps, reaped.
-- **Horizontal scale** — set `TIDELINE_REDIS_URL` to run many stateless instances behind a load balancer, sharing streams through Redis (see below).
-
-### Subscribe tickets
-
-For browsers reading private streams, mint a ticket server-side and put it in the URL — no cookies, no CORS gymnastics (CORS is permissive by design):
-
-```
-ticket = base64url(payload) + "." + base64url(HMAC-SHA256(secret, base64url(payload)))
-payload = {"ns":"","sid":"<stream id>","exp":<unix seconds>}
-```
-
-signed with `TIDELINE_AUTH_SECRET`, then:
-
-```
-GET /streams/:id?from=0&ticket=<ticket>
-```
-
-A tampered or expired ticket is a 401.
+`independent` is a second implementation of the canonical form that shares no
+code with any SDK. Without it, replaying the corpus would only prove the code
+agrees with itself.
 
 ### API
 
-| Method & path | Purpose |
+| Method and path | Purpose |
 | --- | --- |
-| `POST /streams/:id` | append a token (body = chunk) → returns the offset |
-| `POST /streams/:id/complete` | finish the stream successfully |
-| `POST /streams/:id/error` | terminate with an error (body = message) |
-| `DELETE /streams/:id` | drop the stream |
-| `GET /streams/:id` | subscribe over SSE (`Last-Event-ID` or `?from=` to resume) |
-| `GET /streams/:id/ws` | subscribe over WebSocket (`?from=` to resume, `?token=` to auth) |
-| `GET /metrics` | Prometheus metrics |
-| `GET /health` | liveness |
+| `POST /v1/runs` · `GET /v1/runs` | open a run · list runs, paginated and filtered |
+| `POST /v1/runs/:id/events` | append → `{seq, ts, hash, prev_hash}`, honouring `Idempotency-Key` |
+| `GET /v1/runs/:id/events` | read the record, paginated |
+| `GET /v1/runs/:id/watch` | follow it live over SSE |
+| `POST /v1/runs/:id/approvals` … `/resolve` | open a gate · the reviewer's queue · a person decides |
+| `POST /v1/runs/:id/complete` | seal the run and checkpoint it |
+| `GET /v1/runs/:id/checkpoint` | the latest signed checkpoint |
+| `POST /v1/runs/:id/redactions` | erase fields, keep the chain |
+| `GET /v1/.well-known/tideline` | capabilities, versions, signing keys |
 
-SSE event types: default message (a token, carrying its `id:` offset), `gap`, `stream_error`, `done`.
+Full semantics, including the canonical form byte by byte, are in
+[`spec/tlr-1.md`](spec/tlr-1.md).
 
-### Transports
+## Streaming
 
-Tideline serves the same stream over either transport:
-
-- **SSE** (default) — browsers auto-resume via `Last-Event-ID`, no client code. Ideal for one-way token streaming.
-- **WebSocket** (`/streams/:id/ws`) — one bidirectional, binary-capable socket; JSON frames `{ "type": "token" | "gap" | "error" | "done", … }`. For non-browser clients, or when you want a single socket you can also write to.
-
-Both are thin encoders over one internal signal stream, so adding a WebTransport / HTTP-3 transport later is additive, not a rewrite. Reach for SSE unless you specifically need a bidirectional or non-browser/binary client.
-
-### Scaling out
-
-By default Tideline runs as a single in-memory instance. Set `TIDELINE_REDIS_URL` and it becomes a **fleet of stateless instances sharing one Redis** — publish to any instance, subscribe from any other, and resume / replay / fan-out still hold:
+The same engine streams model output to clients, which is what `watch` is built
+on. Resumable over SSE and WebSocket, fan-out to many subscribers, replay for
+late joiners, and slow-client isolation; in-memory by default, Redis-backed for
+horizontal scale.
 
 ```bash
-TIDELINE_REDIS_URL=redis://my-redis:6379 cargo run
+curl -XPOST localhost:8080/streams/demo --data 'Hello '
+curl -N localhost:8080/streams/demo                     # id: 0 / data: Hello
+curl -N -H 'Last-Event-ID: 0' localhost:8080/streams/demo   # resumes exactly
 ```
 
-Each stream is a Redis Stream (an append-only, MAXLEN-trimmed log); offsets are assigned atomically with a Lua script, subscribers replay with `XRANGE` and tail live with a blocking `XREAD`, so the resume seam stays exact across processes — no lost or duplicated token, no sticky sessions. Redis TTLs handle lifecycle, so no reaper runs. Verified end-to-end by cross-instance tests (publish on one backend, subscribe on another sharing the same Redis).
+See [`docs/streaming.md`](docs/streaming.md).
 
-## Deploy
+## Production
 
-```bash
-# Docker
-docker build -t tideline . && docker run -p 8080:8080 tideline
+- **Authentication** — `TIDELINE_PUBLISH_TOKEN` for writes,
+  `TIDELINE_SUBSCRIBE_TOKEN` for reads, or `TIDELINE_AUTH_URL` for per-tenant
+  keys verified against a control plane. Record reads fall open only when
+  *nothing* is configured; a tenant's namespace comes from its credential and
+  never from a request parameter.
+- **Storage** — SQLite by default (WAL, single connection). With
+  `TIDELINE_REDIS_URL` set, the server refuses to start unless records are
+  explicitly single-writer, because a load balancer would otherwise split every
+  run across instances.
+- **Checkpoints** — set `TIDELINE_CHECKPOINT_KEY` to the base64 Ed25519 seed.
+  Without one the server generates an ephemeral key and says so: checkpoints
+  signed with it cannot be verified after a restart.
+- **Observability** — `GET /metrics` (Prometheus) covers runs, appends, append
+  failures, gates by decision, redactions, and checkpoint age. Structured logs
+  via `RUST_LOG`, JSON with `TIDELINE_LOG_FORMAT=json`.
+- **Deploy** — `docker build -t tideline . && docker run -p 8080:8080 tideline`,
+  or `fly deploy` with the included `fly.toml`.
 
-# Fly.io — edit the app name in fly.toml first (names are global)
-fly launch --copy-config --no-deploy && fly deploy
-```
+## What this does not claim
 
-## Status & roadmap
+The chain proves a record was not altered after it was written. It does not prove
+the agent reported its actions honestly in the first place — which is why capture
+belongs in the execution path, and why `attested: false` appears on any approval
+whose reviewer the server could not authenticate.
 
-MVP engine: SSE, single binary, fully tested — fans out to 10k+ concurrent clients (see Benchmarks), with auth, lifecycle/TTL reaping, resource limits, and Prometheus metrics. Runs in-memory or **Redis-backed for horizontal scale** (the multi-instance unlock — shipped, cross-instance tested). SSE **and WebSocket** transports, a JS/TS + React SDK (`useStream` with reconnect tracking, plus a `subscribeWs` WebSocket client), and a Docker/Fly deploy path. Next: WebTransport / HTTP-3 (additive).
+A record with no checkpoint can be truncated undetectably. The tooling says so.
 
-## Who's behind this
+## Related
 
-Tideline is built and maintained by **[Paraph](https://paraphhq.vercel.app)** — it's the real-time spine under Paraph's live human-oversight control room for AI agents. It's released as a standalone engine because resumable streams are useful far beyond that product. Issues and PRs welcome.
+Tideline is the open protocol and the reference implementation.
+[Paraph](https://paraphhq.vercel.app) is a commercial service that speaks it,
+adding external anchoring of checkpoints to independent timestamp authorities,
+evidence packs, retention and legal hold, and a multi-reviewer control room. The
+open half stays useful on its own: self-host it and never talk to anyone.
 
-License: [MIT](LICENSE).
+## Licence
+
+[MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

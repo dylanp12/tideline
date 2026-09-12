@@ -1,5 +1,6 @@
 # Fly.io deploy config for the Tideline engine.
-app = "tideline" # rename to your own Fly app
+# Deployed app: tideline-engine.fly.dev (create with `fly apps create <name>`).
+app = "tideline-engine"
 primary_region = "ams"
 
 [build]

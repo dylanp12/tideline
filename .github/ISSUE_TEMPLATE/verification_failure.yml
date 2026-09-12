@@ -1,0 +1,35 @@
+name: A record will not verify
+description: Verification fails on a record you believe is sound
+labels: [bug, verification]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Check this first.** By far the most common cause is a client that
+        parsed the record into a generic JSON value and converted it to a typed
+        object. That re-serialises `metadata` with its keys reordered, which
+        changes the digest and fails a record that is perfectly sound.
+
+        Use `parseRecord` (TypeScript), `parse_record` (Python),
+        `serde_json::from_str` on the response bytes (Rust), or `json.RawMessage`
+        (Go). See `spec/tlr-1.md` §4.2.
+  - type: checkboxes
+    id: checked
+    attributes:
+      label: Confirmed
+      options:
+        - label: I am reading the record from the original bytes, not a re-serialisation.
+          required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: What the verifier said
+      description: Include the failing sequence number.
+      render: shell
+    validations: { required: true }
+  - type: textarea
+    id: record
+    attributes:
+      label: The record, if you can share it
+      description: Redact content freely — the structure is what matters.
+      render: json

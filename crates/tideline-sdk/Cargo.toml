@@ -1,0 +1,25 @@
+[package]
+name = "tideline-sdk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Official Rust client for TLR/1 — record agent runs, gate high-risk actions on human approval, and verify the result offline."
+keywords = ["ai-agents", "audit", "eu-ai-act", "human-in-the-loop", "oversight"]
+categories = ["api-bindings", "web-programming::http-client"]
+readme = "README.md"
+
+[dependencies]
+tideline-proto = { version = "0.2.0", path = "../tideline-proto" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+tokio = { version = "1", features = ["time"] }
+futures = "0.3"
+bytes = "1"
+
+[dev-dependencies]
+tideline-server = { version = "0.2.0", path = "../tideline-server" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+axum = "0.7"
