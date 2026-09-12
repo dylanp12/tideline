@@ -81,7 +81,11 @@ record is unsealed and uncheckpointed rather than implying more than it knows.
 ## Quickstart
 
 ```bash
-cargo install tideline-server && tideline-server     # listens on :8080
+cargo install tideline-server
+
+# Records are the product, so the server will not start without somewhere
+# durable to keep them. Point it at a file, or say you want them ephemeral.
+TIDELINE_RECORD_DB=./tideline.db tideline-server        # listens on :8080
 ```
 
 ```ts

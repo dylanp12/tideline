@@ -63,9 +63,11 @@ jobs:
       # Declared in the workspace manifest. A bump is a breaking change for
       # anyone pinned to an older toolchain, so it fails here rather than in
       # someone's build.
-      - uses: dtolnay/rust-toolchain@1.82.0
+      # 1.86 is where the floor actually is: reqwest pulls idna, which pulls the
+      # icu crates, and those require it. 1.85 fails.
+      - uses: dtolnay/rust-toolchain@1.86.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p tideline-proto -p tideline-sdk
+      - run: cargo check --workspace
 
   typescript:
     name: sdk · typescript

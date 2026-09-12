@@ -94,7 +94,10 @@ instances sharing a Redis: publish to any, subscribe from any, and resume,
 replay, and fan-out still hold.
 
 ```bash
-TIDELINE_REDIS_URL=redis://my-redis:6379 tideline-server
+TIDELINE_REDIS_URL=redis://my-redis:6379 \
+TIDELINE_RECORD_DB=/data/tideline.db \
+TIDELINE_ALLOW_LOCAL_RECORDS=1 \
+  tideline-server
 ```
 
 Each stream is a Redis Stream — an append-only, MAXLEN-trimmed log. Offsets are

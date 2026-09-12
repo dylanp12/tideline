@@ -113,7 +113,13 @@ fn bearer(headers: &HeaderMap) -> Option<String> {
 
 /// Authorize and resolve the namespace. The namespace comes from the verified
 /// credential, never from a request parameter (audit finding 1).
-async fn authorize(st: &TlrState, headers: &HeaderMap, write: bool) -> Result<String, Response> {
+/// The error is boxed because an `axum::Response` is 128 bytes, and this sits
+/// in the `Result` of every handler.
+async fn authorize(
+    st: &TlrState,
+    headers: &HeaderMap,
+    write: bool,
+) -> Result<String, Box<Response>> {
     let presented = bearer(headers);
     let tenant = match &presented {
         Some(tok) if st.mode.cloud_verify => st.tenants.resolve(tok).await,
@@ -129,7 +135,9 @@ async fn authorize(st: &TlrState, headers: &HeaderMap, write: bool) -> Result<St
     };
     match access {
         Access::Granted { ns } => Ok(ns),
-        Access::Denied => Err((StatusCode::UNAUTHORIZED, "unauthorized").into_response()),
+        Access::Denied => Err(Box::new(
+            (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
+        )),
     }
 }
 
@@ -174,7 +182,7 @@ async fn well_known(State(st): State<TlrState>) -> Response {
 async fn create_run(State(st): State<TlrState>, headers: HeaderMap, body: String) -> Response {
     let ns = match authorize(&st, &headers, true).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let new: NewRun = match serde_json::from_str(&body) {
         Ok(v) => v,
@@ -200,7 +208,7 @@ async fn list_runs(
 ) -> Response {
     let ns = match authorize(&st, &headers, false).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     match st.store.list_runs(&ns, q).await {
         Ok(page) => Json(page).into_response(),
@@ -215,7 +223,7 @@ async fn get_run(
 ) -> Response {
     let ns = match authorize(&st, &headers, false).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_id(&id) {
         return bad("invalid run id");
@@ -234,7 +242,7 @@ async fn append_event(
 ) -> Response {
     let ns = match authorize(&st, &headers, true).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_id(&id) {
         return bad("invalid run id");
@@ -293,7 +301,7 @@ async fn list_events(
 ) -> Response {
     let ns = match authorize(&st, &headers, false).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_id(&id) {
         return bad("invalid run id");
@@ -321,7 +329,7 @@ async fn watch(
 ) -> Response {
     let ns = match authorize(&st, &headers, false).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_id(&id) {
         return bad("invalid run id");
@@ -399,7 +407,7 @@ async fn complete_run(
 ) -> Response {
     let ns = match authorize(&st, &headers, true).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_id(&id) {
         return bad("invalid run id");
@@ -453,7 +461,7 @@ async fn get_checkpoint(
 ) -> Response {
     let ns = match authorize(&st, &headers, false).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_id(&id) {
         return bad("invalid run id");
@@ -484,7 +492,7 @@ async fn create_approval(
 ) -> Response {
     let ns = match authorize(&st, &headers, true).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_id(&id) {
         return bad("invalid run id");
@@ -517,7 +525,7 @@ async fn list_approvals(
 ) -> Response {
     let ns = match authorize(&st, &headers, false).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_id(&id) {
         return bad("invalid run id");
@@ -560,7 +568,7 @@ async fn get_approval(
 ) -> Response {
     let ns = match authorize(&st, &headers, false).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_id(&id) {
         return bad("invalid run id");
@@ -594,7 +602,7 @@ async fn resolve_approval(
 ) -> Response {
     let ns = match authorize(&st, &headers, true).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_id(&id) {
         return bad("invalid run id");
@@ -669,7 +677,7 @@ async fn redact(
 ) -> Response {
     let ns = match authorize(&st, &headers, true).await {
         Ok(ns) => ns,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_id(&id) {
         return bad("invalid run id");
