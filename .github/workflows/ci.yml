@@ -49,21 +49,11 @@ jobs:
       - name: Package check
         run: cargo publish -p tideline-proto --dry-run --allow-dirty
       - name: Manifests are complete enough to publish
+        run: python3 scripts/check-manifests.py
+      - name: Workflows parse
         run: |
-          # What the dry-run would have caught for the other three: missing
-          # metadata. Checked directly so it still fails a PR.
-          fail=0
-          for crate in tideline-server tideline-sdk tideline-cli; do
-            meta=$(cargo metadata --no-deps --format-version 1               | python3 -c "
-import json,sys
-name='$crate'
-p=[x for x in json.load(sys.stdin)['packages'] if x['name']==name][0]
-missing=[f for f in ('description','license','repository','readme') if not p.get(f)]
-print(' '.join(missing))")
-            if [ -n "$meta" ]; then echo "  FAIL $crate is missing: $meta"; fail=1
-            else echo "  ok   $crate"; fi
-          done
-          exit $fail
+          pip install --quiet pyyaml
+          python3 scripts/check-workflows.py
 
   msrv:
     name: engine · MSRV

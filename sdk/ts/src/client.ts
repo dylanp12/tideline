@@ -255,11 +255,30 @@ export class Run {
     });
   }
 
+  /**
+   * The record.
+   *
+   * With no `limit`, pages until the server returns a short page. Returning
+   * only the first page would hand back a valid prefix — which verifies, and is
+   * missing evidence, the worst possible combination for an audit trail. Pass
+   * `limit` when you deliberately want one page.
+   */
   async events(opts: { from?: number; limit?: number } = {}): Promise<TlrEvent[]> {
-    const qs = new URLSearchParams({
-      from: String(opts.from ?? 0),
-      limit: String(opts.limit ?? 5000),
-    });
+    if (opts.limit !== undefined) return this.page(opts.from ?? 0, opts.limit);
+
+    const PAGE = 1000;
+    const all: TlrEvent[] = [];
+    let from = opts.from ?? 0;
+    for (;;) {
+      const batch = await this.page(from, PAGE);
+      all.push(...batch);
+      if (batch.length < PAGE) return all;
+      from = batch[batch.length - 1]!.seq + 1;
+    }
+  }
+
+  private async page(from: number, limit: number): Promise<TlrEvent[]> {
+    const qs = new URLSearchParams({ from: String(from), limit: String(limit) });
     return this.client.record(this.path(`/events?${qs}`));
   }
 

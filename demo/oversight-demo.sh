@@ -25,7 +25,10 @@ say() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 if ! curl -sf "$BASE/health" >/dev/null 2>&1; then
   echo "starting engine (cargo build)…"
   cargo build -q --bin tideline-server
-  ./target/debug/tideline-server >/tmp/tideline-oversight-demo.log 2>&1 &
+  # A demo does not need to outlive itself, and the server refuses an in-memory
+  # record store unless told that is intended.
+  TIDELINE_EPHEMERAL_RECORDS=1 ./target/debug/tideline-server \
+    >/tmp/tideline-oversight-demo.log 2>&1 &
   STARTED=$!
   curl --retry 60 --retry-connrefused --retry-delay 0 -sf "$BASE/health" >/dev/null
 fi

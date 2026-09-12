@@ -144,7 +144,7 @@ fn verify(path: &str, checkpoint: Option<&str>, public_key: Option<&str>, quiet:
 
     let mut code = OK;
     if let Some(cp_path) = checkpoint {
-        code = code.max(check_checkpoint(cp_path, public_key, &ok, quiet));
+        code = code.max(check_checkpoint(cp_path, public_key, &events, &ok, quiet));
     } else if !ok.sealed && !quiet {
         // Saying so is the difference between a verifier and a rubber stamp.
         println!(
@@ -161,6 +161,7 @@ fn verify(path: &str, checkpoint: Option<&str>, public_key: Option<&str>, quiet:
 fn check_checkpoint(
     path: &str,
     public_key: Option<&str>,
+    events: &[RunEvent],
     ok: &tideline_proto::ChainOk,
     quiet: bool,
 ) -> u8 {
@@ -179,6 +180,19 @@ fn check_checkpoint(
         }
     };
 
+    // A checkpoint names the run it covers. Accepting one without checking that
+    // would let a validly signed checkpoint for a different run vouch for this
+    // record.
+    if let Some(run_id) = run_id_of(events) {
+        if cp.run_id != run_id {
+            eprintln!(
+                "the checkpoint covers run {}, but this record is run {run_id}",
+                cp.run_id
+            );
+            return UNSOUND;
+        }
+    }
+
     if cp.seq > ok.head_seq {
         eprintln!(
             "TRUNCATED: the checkpoint covers seq {} but the record ends at seq {}. \
@@ -189,15 +203,35 @@ fn check_checkpoint(
         );
         return UNSOUND;
     }
-    if cp.seq == ok.head_seq && cp.head_hash != ok.head_hash {
-        eprintln!("the checkpoint's head does not match this record's head");
-        return UNSOUND;
+
+    // Match the checkpoint against the event it actually covers, not only
+    // against the head. A checkpoint from a different history can sit below
+    // this record's head and would otherwise pass unexamined.
+    match events.iter().find(|e| e.seq == cp.seq) {
+        Some(covered) if covered.hash != cp.head_hash => {
+            eprintln!(
+                "the checkpoint's head for seq {} does not match this record: it attests \
+                 {}…, the record has {}…. These are different histories.",
+                cp.seq,
+                &cp.head_hash.to_hex()[..16],
+                &covered.hash.to_hex()[..16]
+            );
+            return UNSOUND;
+        }
+        None => {
+            eprintln!(
+                "the checkpoint covers seq {}, which is not in this record",
+                cp.seq
+            );
+            return UNSOUND;
+        }
+        Some(_) => {}
     }
 
     let Some(key_b64) = public_key else {
         if !quiet {
             println!(
-                "checkpoint covers seq {} — pass --public-key to check its signature",
+                "checkpoint matches seq {} — pass --public-key to check its signature",
                 cp.seq
             );
         }
@@ -234,6 +268,15 @@ fn check_checkpoint(
                     "checkpoint signature valid (key {}), covering seq {}",
                     cp.key_id, cp.seq
                 );
+                if cp.seq < ok.head_seq {
+                    println!(
+                        "note: it covers seq {} of {}, so the {} events after it are \
+                         protected by the chain but not by this checkpoint",
+                        cp.seq,
+                        ok.head_seq,
+                        ok.head_seq - cp.seq
+                    );
+                }
             }
             OK
         }
@@ -242,6 +285,14 @@ fn check_checkpoint(
             UNSOUND
         }
     }
+}
+
+/// The run id a record declares, read from its `run_started` envelope.
+fn run_id_of(events: &[RunEvent]) -> Option<String> {
+    let first = events.first()?;
+    let metadata = first.metadata_raw()?;
+    let value: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    Some(value.get("run_id")?.as_str()?.to_string())
 }
 
 /// Say what went wrong in terms of the record, not the data structure.

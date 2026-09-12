@@ -6,6 +6,14 @@ primary_region = "ams"
 [build]
   dockerfile = "Dockerfile"
 
+# Records must outlive a machine restart.
+[mounts]
+  source = "tideline_data"
+  destination = "/data"
+
+[env]
+  TIDELINE_RECORD_DB = "/data/tideline.db"
+
 [http_service]
   internal_port = 8080
   force_https = true

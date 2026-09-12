@@ -16,7 +16,15 @@ export async function startServer(): Promise<{ base: string; stop: () => void }>
   }
   const port = 9000 + Math.floor(Math.random() * 900);
   const child: ChildProcess = spawn(BIN, [], {
-    env: { ...process.env, TIDELINE_PORT: String(port), RUST_LOG: "warn" },
+    env: {
+      ...process.env,
+      TIDELINE_PORT: String(port),
+      RUST_LOG: "warn",
+      // The server refuses to start with an in-memory record store unless told
+      // that is intended, because losing the record is catastrophic in
+      // production. For a test it is exactly what we want.
+      TIDELINE_EPHEMERAL_RECORDS: "1",
+    },
     stdio: "ignore",
   });
 

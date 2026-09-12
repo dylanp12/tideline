@@ -28,7 +28,14 @@ func startServer(t *testing.T) string {
 
 	port := 9000 + rand.Intn(900)
 	cmd := exec.Command(bin)
-	cmd.Env = append(os.Environ(), "TIDELINE_PORT="+itoa(port), "RUST_LOG=warn")
+	// TIDELINE_EPHEMERAL_RECORDS: the server refuses an in-memory record store
+	// unless told that is intended, because losing the record is catastrophic in
+	// production — and exactly what a test wants.
+	cmd.Env = append(os.Environ(),
+		"TIDELINE_PORT="+itoa(port),
+		"RUST_LOG=warn",
+		"TIDELINE_EPHEMERAL_RECORDS=1",
+	)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start server: %v", err)
 	}

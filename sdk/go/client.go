@@ -330,11 +330,33 @@ func (r *Run) Resolve(ctx context.Context, seq uint64, decision Decision, review
 	return r.client.json(ctx, http.MethodPost, path, body, nil, nil)
 }
 
-// Events returns the record from offset.
+// Events returns the record from an offset.
+//
+// A limit of zero or less pages until the server returns a short page.
+// Returning only the first page would hand back a valid prefix — which
+// verifies, and is missing evidence, the worst possible combination for an audit
+// trail. Pass a positive limit when you deliberately want one page.
 func (r *Run) Events(ctx context.Context, from uint64, limit int) ([]Event, error) {
-	if limit <= 0 {
-		limit = 5000
+	if limit > 0 {
+		return r.page(ctx, from, limit)
 	}
+
+	const pageSize = 1000
+	var all []Event
+	for {
+		batch, err := r.page(ctx, from, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, batch...)
+		if len(batch) < pageSize {
+			return all, nil
+		}
+		from = batch[len(batch)-1].Seq + 1
+	}
+}
+
+func (r *Run) page(ctx context.Context, from uint64, limit int) ([]Event, error) {
 	path := fmt.Sprintf("%s?from=%d&limit=%d", r.path("/events"), from, limit)
 	var events []Event
 	return events, r.client.json(ctx, http.MethodGet, path, nil, &events, nil)

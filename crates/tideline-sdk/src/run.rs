@@ -224,8 +224,30 @@ impl Run {
     }
 
     /// The whole record, from the beginning.
+    ///
+    /// Pages until the server returns a short page. Returning only the first
+    /// page would hand back a valid prefix — which verifies, and is missing
+    /// evidence, the worst possible combination for an audit trail.
     pub async fn events(&self) -> Result<Vec<RunEvent>> {
-        self.events_from(0, 5000).await
+        self.events_paged(1000).await
+    }
+
+    /// As `events`, with an explicit page size. Exposed so the paging loop can be
+    /// tested against a handful of events rather than a thousand round trips.
+    pub async fn events_paged(&self, page: u32) -> Result<Vec<RunEvent>> {
+        let mut all: Vec<RunEvent> = Vec::new();
+        let mut from = 0u64;
+        loop {
+            let batch = self.events_from(from, page).await?;
+            let short = batch.len() < page as usize;
+            if let Some(last) = batch.last() {
+                from = last.seq + 1;
+            }
+            all.extend(batch);
+            if short {
+                return Ok(all);
+            }
+        }
     }
 
     pub async fn events_from(&self, from: u64, limit: u32) -> Result<Vec<RunEvent>> {
@@ -310,24 +332,37 @@ impl Run {
 
 /// Decode an SSE byte stream into events.
 ///
-/// Small enough to own: the wire format here is `data:` lines terminated by a
-/// blank line, and a dependency would cost more than it saves.
+/// Frames are split on the raw bytes, not on a per-chunk string. `reqwest` may
+/// end a chunk mid-character, and decoding each chunk on its own would replace
+/// both halves with U+FFFD — quietly altering any event containing non-ASCII
+/// text, and breaking the hash it was recorded under. Frame delimiters are
+/// ASCII, so splitting before decoding is safe and the decode always sees a
+/// whole frame.
 fn sse_events(
     bytes: impl Stream<Item = reqwest::Result<bytes::Bytes>>,
 ) -> impl Stream<Item = Result<RunEvent>> {
-    let mut buf = String::new();
+    let mut buf: Vec<u8> = Vec::new();
     Box::pin(bytes).flat_map(move |chunk| {
         let mut out: Vec<Result<RunEvent>> = Vec::new();
         match chunk {
             Err(e) => out.push(Err(Error::Transport(e))),
             Ok(b) => {
-                buf.push_str(&String::from_utf8_lossy(&b));
-                while let Some(end) = buf.find("\n\n") {
-                    let frame = buf[..end].to_string();
-                    buf.drain(..end + 2);
+                buf.extend_from_slice(&b);
+                while let Some(end) = find_frame_end(&buf) {
+                    let frame: Vec<u8> = buf.drain(..end + 2).collect();
+                    let text = match std::str::from_utf8(&frame[..end]) {
+                        Ok(t) => t.to_string(),
+                        Err(e) => {
+                            out.push(Err(Error::Protocol(format!(
+                                "frame is not valid UTF-8: {e}"
+                            ))));
+                            continue;
+                        }
+                    };
+
                     let mut data = String::new();
                     let mut terminal = false;
-                    for line in frame.lines() {
+                    for line in text.lines() {
                         if let Some(rest) = line.strip_prefix("data:") {
                             data.push_str(rest.trim_start());
                         } else if let Some(name) = line.strip_prefix("event:") {
@@ -347,4 +382,71 @@ fn sse_events(
         }
         futures::stream::iter(out)
     })
+}
+
+/// The index of the blank line ending the first complete frame in `buf`.
+fn find_frame_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(2).position(|w| w == b"\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+
+    /// Feed a byte stream in chunks of exactly `n` bytes, so a multi-byte
+    /// character lands across a boundary.
+    fn chunked(bytes: Vec<u8>, n: usize) -> impl Stream<Item = reqwest::Result<bytes::Bytes>> {
+        let chunks: Vec<_> = bytes
+            .chunks(n)
+            .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
+            .collect();
+        futures::stream::iter(chunks)
+    }
+
+    #[tokio::test]
+    async fn decodes_events_split_across_byte_chunks() {
+        // The corpus has Unicode in every field, so this is the normal case,
+        // not an exotic one. Decoding per chunk would replace the halves of a
+        // split character with U+FFFD and change the content that was hashed.
+        let event = r#"{"seq":1,"ts":2,"kind":"message","content":"€40 000 — ≈ 38% DTI 🏦"}"#;
+        let wire = format!("id: 1\ndata: {event}\n\n");
+
+        for chunk_size in [1, 2, 3, 5, 7, 13, 64] {
+            let events: Vec<_> = sse_events(chunked(wire.clone().into_bytes(), chunk_size))
+                .collect()
+                .await;
+            assert_eq!(events.len(), 1, "chunk size {chunk_size}");
+            let decoded = events.into_iter().next().unwrap().expect("decodes");
+            assert_eq!(
+                decoded.content.as_deref(),
+                Some("€40 000 — ≈ 38% DTI 🏦"),
+                "content corrupted at chunk size {chunk_size}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn handles_several_frames_in_one_chunk() {
+        let wire = concat!(
+            "data: {\"seq\":0,\"ts\":1,\"kind\":\"run_started\"}\n\n",
+            "data: {\"seq\":1,\"ts\":2,\"kind\":\"message\",\"content\":\"b\"}\n\n",
+        );
+        let events: Vec<_> = sse_events(chunked(wire.as_bytes().to_vec(), 4096))
+            .collect()
+            .await;
+        assert_eq!(events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn stops_at_a_terminal_frame() {
+        let wire = concat!(
+            "data: {\"seq\":0,\"ts\":1,\"kind\":\"run_started\"}\n\n",
+            "event: done\ndata: \n\n",
+        );
+        let events: Vec<_> = sse_events(chunked(wire.as_bytes().to_vec(), 9))
+            .collect()
+            .await;
+        assert_eq!(events.len(), 1, "the terminal frame is not an event");
+    }
 }

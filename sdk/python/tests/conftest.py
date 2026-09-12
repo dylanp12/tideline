@@ -25,7 +25,15 @@ def server() -> str:
     port = random.randint(9000, 9899)
     proc = subprocess.Popen(
         [str(BIN)],
-        env={"PATH": "/usr/bin:/bin", "TIDELINE_PORT": str(port), "RUST_LOG": "warn"},
+        env={
+            "PATH": "/usr/bin:/bin",
+            "TIDELINE_PORT": str(port),
+            "RUST_LOG": "warn",
+            # The server refuses an in-memory record store unless told that is
+            # intended: losing the record is catastrophic in production, and
+            # exactly what a test wants.
+            "TIDELINE_EPHEMERAL_RECORDS": "1",
+        },
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

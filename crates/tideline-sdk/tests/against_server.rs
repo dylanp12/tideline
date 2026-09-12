@@ -302,3 +302,113 @@ async fn runs_can_be_listed_and_filtered() {
     assert_eq!(filtered.runs.len(), 1);
     assert_eq!(filtered.runs[0].run_id, "r2");
 }
+
+#[tokio::test]
+async fn events_pages_through_the_whole_record() {
+    // A record longer than one page used to come back as a valid prefix, which
+    // verifies and is missing evidence — the worst possible pair. Tested with a
+    // small page rather than a thousand appends: the loop is what breaks, not
+    // the constant.
+    let tl = client().await;
+    let run = tl
+        .start_run("long", Agent::new("a", "1"))
+        .send()
+        .await
+        .unwrap();
+    for i in 0..9 {
+        run.record(NewEvent::message().content(format!("m{i}")))
+            .await
+            .unwrap();
+    }
+
+    for page in [1, 2, 3, 5, 10, 100] {
+        let events = run.events_paged(page).await.unwrap();
+        assert_eq!(events.len(), 10, "page size {page}");
+        assert_eq!(events.last().unwrap().seq, 9, "page size {page}");
+        verify_chain(&events).expect("the whole record verifies");
+    }
+
+    // An exact multiple of the page size, where the loop needs one more request
+    // to learn that it is finished.
+    run.record(NewEvent::message().content("m9")).await.unwrap();
+    assert_eq!(run.events_paged(1).await.unwrap().len(), 11);
+}
+
+#[tokio::test]
+async fn lifecycle_kinds_cannot_be_appended() {
+    // Appending these would put a second envelope at a nonzero seq, or a
+    // terminal event that does not seal the run: a record that is invalid by
+    // shape but which the chain verifier still accepts.
+    let tl = client().await;
+    let run = tl
+        .start_run("r1", Agent::new("a", "1"))
+        .send()
+        .await
+        .unwrap();
+
+    for kind in [
+        EventKind::RunStarted,
+        EventKind::RunFinished,
+        EventKind::Redaction,
+    ] {
+        let err = run
+            .record(NewEvent::new(kind).content("x"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, tideline_sdk::Error::Status { code: 400, .. }),
+            "{} should be refused, got {err}",
+            kind.as_str()
+        );
+    }
+
+    // And the record is still exactly what it was.
+    let events = run.events().await.unwrap();
+    assert_eq!(events.len(), 1);
+    verify_chain(&events).unwrap();
+}
+
+#[tokio::test]
+async fn a_lapsed_gate_expires_when_anyone_looks() {
+    // Nothing used to expire a gate, so `gate()` polled forever and the
+    // required `expired` resolution never reached the record.
+    let tl = client().await;
+    let run = tl
+        .start_run("r1", Agent::new("a", "1"))
+        .send()
+        .await
+        .unwrap();
+
+    // Already lapsed.
+    let opened = run
+        .open_gate("Approve something", Duration::from_secs(0))
+        .await
+        .unwrap();
+
+    let resolution = run.await_gate(opened.seq).await.unwrap();
+    assert_eq!(resolution.decision, Decision::Expired);
+    assert!(!resolution.is_approved());
+
+    // And it is in the chain, not merely reported.
+    let events = run.verified_events().await.unwrap();
+    let resolved = events
+        .iter()
+        .any(|e| e.name.as_deref() == Some("approval_resolved"));
+    assert!(resolved, "the expiry must be written into the record");
+    assert!(run.approvals().await.unwrap().is_empty(), "queue is clear");
+}
+
+#[tokio::test]
+async fn completing_twice_is_a_conflict_once_checkpointed() {
+    let tl = client().await;
+    let run = tl
+        .start_run("r1", Agent::new("a", "1"))
+        .send()
+        .await
+        .unwrap();
+    run.complete().await.unwrap();
+    assert!(run.checkpoint().await.unwrap().is_some());
+
+    let err = run.complete().await.unwrap_err();
+    assert!(err.is_conflict(), "got {err}");
+}

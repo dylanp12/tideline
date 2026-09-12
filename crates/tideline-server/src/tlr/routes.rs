@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::convert::Infallible;
 use std::sync::Arc;
+use tideline_proto::{EventKind, RunEvent};
 
 /// Resolves a Cloud-issued key to the tenant namespace that owns it.
 ///
@@ -242,6 +243,21 @@ async fn append_event(
         Ok(v) => v,
         Err(e) => return bad(&format!("invalid event: {e}")),
     };
+    // `run_started`, `run_finished` and `redaction` carry structural meaning
+    // that only their own routes can honour: an append here would place a
+    // second envelope at a nonzero seq, or a terminal event that does not seal
+    // the run. Either produces a record that is invalid by §3.1 and which the
+    // chain verifier still accepts, because the chain checks integrity, not
+    // shape.
+    if matches!(
+        event.kind,
+        EventKind::RunStarted | EventKind::RunFinished | EventKind::Redaction
+    ) {
+        return bad(&format!(
+            "{} is written by its own route, not by appending",
+            event.kind.as_str()
+        ));
+    }
     let idem = headers
         .get("idempotency-key")
         .and_then(|v| v.to_str().ok())
@@ -311,35 +327,65 @@ async fn watch(
         return bad("invalid run id");
     }
     let from = q.from.unwrap_or(0);
-    let history = match st.store.events(&ns, &id, from, 5000).await {
-        Ok(e) => e,
-        Err(e) => return err(e),
-    };
-    let next = history.last().map(|e| e.seq + 1).unwrap_or(from);
-    let live = st.backend.subscribe(&stream_name(&ns, &id), next).await;
+
+    // Subscribe before reading, so nothing appended during the read is missed,
+    // and subscribe from the start of the buffer rather than from a record
+    // sequence. The spine's offsets are its own: a reaped in-memory stream or
+    // an expired Redis stream restarts them at zero while the record is at a
+    // much higher sequence, so treating one as the other silently drops events.
+    //
+    // The spine is therefore a wake-up, not a source. Every event a watcher
+    // receives is read from the record, which is the only thing that knows the
+    // real sequence.
+    let live = st.backend.subscribe(&stream_name(&ns, &id), 0).await;
+    let store = st.store.clone();
+    let (ns_owned, id_owned) = (ns.clone(), id.clone());
 
     let stream = async_stream::stream! {
-        for e in history {
-            let seq = e.seq;
-            if let Ok(json) = serde_json::to_string(&e) {
-                yield Ok::<Event, Infallible>(Event::default().id(seq.to_string()).data(json));
-            }
-        }
         let mut live = live;
-        while let Some(sig) = live.next().await {
-            match sig {
-                Signal::Token(t) => {
-                    yield Ok(Event::default().id(t.offset.to_string()).data(t.data));
+        let mut next = from;
+        let mut finished = false;
+
+        loop {
+            // Drain whatever the record holds from `next`.
+            loop {
+                let batch = match store.events(&ns_owned, &id_owned, next, 500).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "watch: cannot read the record");
+                        return;
+                    }
+                };
+                let drained = batch.len();
+                for e in batch {
+                    next = e.seq + 1;
+                    if let Ok(json) = serde_json::to_string(&e) {
+                        yield Ok::<Event, Infallible>(
+                            Event::default().id(e.seq.to_string()).data(json),
+                        );
+                    }
                 }
-                Signal::Gap => yield Ok(Event::default().event("gap").data("")),
-                Signal::Error(m) => {
+                if drained < 500 {
+                    break;
+                }
+            }
+
+            if finished {
+                yield Ok(Event::default().event("done").data(""));
+                return;
+            }
+
+            match live.next().await {
+                // A frame only means "something changed"; the loop above is
+                // what decides what that was.
+                Some(Signal::Token(_)) | Some(Signal::Gap) => continue,
+                Some(Signal::Error(m)) => {
                     yield Ok(Event::default().event("stream_error").data(m));
-                    break;
+                    return;
                 }
-                Signal::Done => {
-                    yield Ok(Event::default().event("done").data(""));
-                    break;
-                }
+                // Drain once more before closing, so a final append cannot be
+                // lost to the race between the last publish and the terminal.
+                Some(Signal::Done) | None => finished = true,
             }
         }
     };
@@ -362,10 +408,40 @@ async fn complete_run(
         Ok(res) => {
             incr(&metrics().runs_sealed);
             publish_head(&st, &ns, &id, res.seq).await;
-            write_checkpoint(&st, &ns, &id, res.seq, res.hash).await;
+            if let Err(e) = write_checkpoint(&st, &ns, &id, res.seq, res.hash).await {
+                // The run is sealed but has no checkpoint, so its tail could be
+                // removed undetectably. Report the failure rather than a
+                // success the record does not support; a retry takes the
+                // repair path below.
+                tracing::error!(error = %e, run_id = %id, "sealed without a checkpoint");
+                return err(e);
+            }
             st.backend.complete(&stream_name(&ns, &id)).await;
             Json(res).into_response()
         }
+        // Already sealed. If the checkpoint is missing — the case above — write
+        // it now instead of refusing, so the caller can repair rather than be
+        // left with unprotected evidence and no way to fix it.
+        Err(StoreError::Conflict(msg)) => match st.store.latest_checkpoint(&ns, &id).await {
+            Ok(None) => match st.store.get_run(&ns, &id).await {
+                Ok(env) => {
+                    if let Err(e) =
+                        write_checkpoint(&st, &ns, &id, env.head_seq, env.head_hash).await
+                    {
+                        return err(e);
+                    }
+                    Json(json!({
+                        "seq": env.head_seq,
+                        "hash": env.head_hash,
+                        "repaired": true,
+                    }))
+                    .into_response()
+                }
+                Err(e) => err(e),
+            },
+            Ok(Some(_)) => err(StoreError::Conflict(msg)),
+            Err(e) => err(e),
+        },
         Err(e) => err(e),
     }
 }
@@ -446,7 +522,7 @@ async fn list_approvals(
     if !valid_id(&id) {
         return bad("invalid run id");
     }
-    match st.store.events(&ns, &id, 0, 5000).await {
+    match expire_then_read(&st, &ns, &id).await {
         Ok(events) => {
             let pending: Vec<_> = approvals::project(&events)
                 .into_iter()
@@ -456,6 +532,25 @@ async fn list_approvals(
         }
         Err(e) => err(e),
     }
+}
+
+/// Read a run's events, resolving any lapsed gate first.
+///
+/// Expiry has to happen somewhere, and a background sweep over every run is
+/// both more machinery and less timely than doing it on the read that would
+/// otherwise report a gate as pending. An agent waiting on `gate()` polls this
+/// path, so the `expired` resolution lands in the chain at the moment somebody
+/// first asks.
+async fn expire_then_read(st: &TlrState, ns: &str, id: &str) -> StoreResult<Vec<RunEvent>> {
+    let events = st.store.events(ns, id, 0, 5000).await?;
+    let lapsed = approvals::expire_lapsed_in(st.store.as_ref(), ns, id, &events, now_ms()).await?;
+    if lapsed == 0 {
+        return Ok(events);
+    }
+    for _ in 0..lapsed {
+        incr(&metrics().gates_expired);
+    }
+    st.store.events(ns, id, 0, 5000).await
 }
 
 async fn get_approval(
@@ -470,7 +565,7 @@ async fn get_approval(
     if !valid_id(&id) {
         return bad("invalid run id");
     }
-    match st.store.events(&ns, &id, 0, 5000).await {
+    match expire_then_read(&st, &ns, &id).await {
         Ok(events) => match approvals::project(&events)
             .into_iter()
             .find(|g| g.seq == seq)
@@ -625,6 +720,10 @@ async fn publish_head(st: &TlrState, ns: &str, run_id: &str, seq: u64) {
     }
 }
 
+/// Periodic checkpoints are best-effort: the next one supersedes a missed one,
+/// and failing an append because its checkpoint could not be written would lose
+/// the event in order to protect the protection. The checkpoint at seal is not
+/// best-effort — see `complete_run`.
 async fn maybe_checkpoint(
     st: &TlrState,
     ns: &str,
@@ -633,7 +732,9 @@ async fn maybe_checkpoint(
     head: tideline_proto::Hash,
 ) {
     if st.checkpoint_every > 0 && seq % st.checkpoint_every == 0 {
-        write_checkpoint(st, ns, run_id, seq, head).await;
+        if let Err(e) = write_checkpoint(st, ns, run_id, seq, head).await {
+            tracing::warn!(error = %e, run_id, seq, "periodic checkpoint failed");
+        }
     }
 }
 
@@ -643,15 +744,12 @@ async fn write_checkpoint(
     run_id: &str,
     seq: u64,
     head: tideline_proto::Hash,
-) {
+) -> StoreResult<()> {
     let cp = st.keys.sign_head(run_id, seq, head, now_ms());
-    match st.store.put_checkpoint(ns, &cp).await {
-        Ok(()) => {
-            incr(&metrics().checkpoints_written);
-            metrics()
-                .last_checkpoint_ms
-                .store(cp.ts, std::sync::atomic::Ordering::Relaxed);
-        }
-        Err(e) => tracing::warn!(error = %e, run_id, seq, "failed to write checkpoint"),
-    }
+    st.store.put_checkpoint(ns, &cp).await?;
+    incr(&metrics().checkpoints_written);
+    metrics()
+        .last_checkpoint_ms
+        .store(cp.ts, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
 }

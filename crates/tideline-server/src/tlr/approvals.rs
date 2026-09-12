@@ -200,11 +200,29 @@ pub async fn expire_lapsed(
     now_ms: u64,
 ) -> StoreResult<usize> {
     let events = store.events(ns, run_id, 0, 5000).await?;
-    let lapsed: Vec<u64> = project(&events)
+    expire_lapsed_in(store, ns, run_id, &events, now_ms).await
+}
+
+/// As `expire_lapsed`, over events the caller has already read.
+///
+/// A read path that is about to report gate states can expire the lapsed ones
+/// without paying for a second query, which is what makes doing this on read
+/// cheap enough to be the only mechanism.
+pub async fn expire_lapsed_in(
+    store: &dyn TlrStore,
+    ns: &str,
+    run_id: &str,
+    events: &[RunEvent],
+    now_ms: u64,
+) -> StoreResult<usize> {
+    let lapsed: Vec<u64> = project(events)
         .into_iter()
         .filter(|g| g.state == ApprovalState::Pending && g.expires_at <= now_ms)
         .map(|g| g.seq)
         .collect();
+    if lapsed.is_empty() {
+        return Ok(0);
+    }
 
     let mut n = 0;
     for seq in lapsed {

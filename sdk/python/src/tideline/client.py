@@ -265,12 +265,30 @@ class Run:
 
     # --- the record -------------------------------------------------------
 
-    def events(self, frm: int = 0, limit: int = 5000) -> List[Event]:
+    def events(self, frm: int = 0, limit: Optional[int] = None) -> List[Event]:
         """The record.
+
+        With no ``limit``, pages until the server returns a short page.
+        Returning only the first page would hand back a valid prefix — which
+        verifies, and is missing evidence, the worst possible combination for an
+        audit trail. Pass ``limit`` when you deliberately want one page.
 
         Read from the response text, never ``json.loads`` alone: a parsed value
         discards the metadata bytes and every event then fails verification.
         """
+        if limit is not None:
+            return self._page(frm, limit)
+
+        page_size = 1000
+        out: List[Event] = []
+        while True:
+            batch = self._page(frm, page_size)
+            out.extend(batch)
+            if len(batch) < page_size:
+                return out
+            frm = batch[-1].seq + 1
+
+    def _page(self, frm: int, limit: int) -> List[Event]:
         text = self.client._request("GET", self._path(f"/events?from={frm}&limit={limit}"))
         return parse_record(text)
 

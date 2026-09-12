@@ -20,6 +20,37 @@ fn init_tracing() {
     }
 }
 
+/// Refuse to run a configuration that silently discards the record.
+///
+/// With `TIDELINE_RECORD_DB` unset the store is in-memory, which is right for
+/// tests and catastrophic in production: every run, event, approval, redaction
+/// and checkpoint vanishes on restart, and the audit record is the product.
+/// Neither the Dockerfile nor fly.toml used to set it, so data loss was the
+/// deployed default.
+fn guard_record_durability() {
+    if std::env::var("TIDELINE_RECORD_DB")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .is_some()
+    {
+        return;
+    }
+    if std::env::var("TIDELINE_EPHEMERAL_RECORDS").is_ok() {
+        warn!(
+            "TIDELINE_RECORD_DB is unset and TIDELINE_EPHEMERAL_RECORDS is set — records \
+             live in memory and are lost on restart. Never run this way in production."
+        );
+        return;
+    }
+    error!(
+        "TIDELINE_RECORD_DB is not set. Records would be held in memory and lost on \
+         restart, which for an audit record means the evidence is gone. Set it to a file \
+         path on a persistent volume (the Docker image defaults to /data/tideline.db), or \
+         set TIDELINE_EPHEMERAL_RECORDS=1 to accept an in-memory store."
+    );
+    std::process::exit(1);
+}
+
 /// Refuse to run a configuration that would fragment the record.
 ///
 /// With `TIDELINE_REDIS_URL` set, streams span instances but records are held
@@ -91,6 +122,8 @@ async fn main() {
     if let Some(u) = &auth.verify_url {
         info!(verify_url = %u, "Cloud key verification enabled");
     }
+
+    guard_record_durability();
 
     let redis_url = std::env::var("TIDELINE_REDIS_URL")
         .ok()

@@ -424,3 +424,87 @@ async fn a_record_built_over_http_verifies_offline() {
     assert_eq!(ok.len, 7);
     assert!(ok.sealed);
 }
+
+#[tokio::test]
+async fn watch_survives_the_spine_being_reset() {
+    // The spine's offsets are its own. A reaped in-memory stream or an expired
+    // Redis stream restarts them at zero while the record is at a much higher
+    // sequence, so a watcher that treated one as the other would silently skip
+    // events. Deleting the stream reproduces exactly that.
+    let base = base().await;
+    create_run(&base, "reset").await;
+    for i in 0..3 {
+        append(
+            &base,
+            "reset",
+            json!({ "kind": "message", "content": format!("m{i}") }),
+        )
+        .await;
+    }
+
+    // Drop the transient stream, leaving the durable record untouched.
+    let dropped = client()
+        .delete(format!("{base}/streams/tlr.reset"))
+        .send()
+        .await
+        .unwrap();
+    assert!(dropped.status().is_success() || dropped.status() == 404);
+
+    append(
+        &base,
+        "reset",
+        json!({ "kind": "message", "content": "after the reset" }),
+    )
+    .await;
+
+    // Everything is still delivered, in order, from sequence zero.
+    let body = client()
+        .get(format!("{base}/v1/runs/reset/watch?from=0"))
+        .header("accept", "text/event-stream")
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .unwrap();
+
+    let text = read_sse_until(body, 5).await;
+    let events: Vec<RunEvent> = text
+        .iter()
+        .map(|frame| serde_json::from_str(frame).expect("an event per frame"))
+        .collect();
+
+    assert_eq!(events.len(), 5, "run_started plus four appends");
+    assert_eq!(events[4].content.as_deref(), Some("after the reset"));
+    // The ids carry record sequences, not spine offsets.
+    for (i, e) in events.iter().enumerate() {
+        assert_eq!(e.seq, i as u64);
+    }
+    verify_chain(&events).expect("what the watcher saw is the record");
+}
+
+/// Collect `want` SSE `data:` payloads from a streaming response.
+async fn read_sse_until(res: reqwest::Response, want: usize) -> Vec<String> {
+    use futures::StreamExt;
+    let mut stream = res.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut out: Vec<String> = Vec::new();
+
+    while let Some(chunk) = stream.next().await {
+        buf.extend_from_slice(&chunk.unwrap());
+        while let Some(end) = buf.windows(2).position(|w| w == b"\n\n") {
+            let frame: Vec<u8> = buf.drain(..end + 2).collect();
+            let text = String::from_utf8_lossy(&frame[..end]).to_string();
+            for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("data:") {
+                    let data = rest.trim_start();
+                    if !data.is_empty() {
+                        out.push(data.to_string());
+                    }
+                }
+            }
+        }
+        if out.len() >= want {
+            return out;
+        }
+    }
+    out
+}
