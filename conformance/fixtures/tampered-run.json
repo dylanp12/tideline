@@ -1,0 +1,66 @@
+[
+  {
+    "seq": 0,
+    "ts": 1757635200000,
+    "kind": "run_started",
+    "content": "event 0",
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "hash": "823776f7972f99c7876a71077a5f29d4dc83090498b701dfd2ba40b85ed5b938"
+  },
+  {
+    "seq": 1,
+    "ts": 1757635200001,
+    "kind": "message",
+    "content": "event 1",
+    "prev_hash": "823776f7972f99c7876a71077a5f29d4dc83090498b701dfd2ba40b85ed5b938",
+    "hash": "b370e596f5bc9ad28727d13295adca7f7eace455a1680313fc3bf5423b2a5e1c"
+  },
+  {
+    "seq": 2,
+    "ts": 1757635200002,
+    "kind": "message",
+    "content": "event 2",
+    "prev_hash": "b370e596f5bc9ad28727d13295adca7f7eace455a1680313fc3bf5423b2a5e1c",
+    "hash": "5064d3bd9ed62d20e9d33b2f391c191a49612b195fb8eea4401bf297ec27d52d"
+  },
+  {
+    "seq": 3,
+    "ts": 1757635200003,
+    "kind": "message",
+    "content": "altered after the fact",
+    "prev_hash": "5064d3bd9ed62d20e9d33b2f391c191a49612b195fb8eea4401bf297ec27d52d",
+    "hash": "6ff299a8db2ccddfbe69d6786dcd44209b63f7d4dad81aee2a9535d25ad4f03e"
+  },
+  {
+    "seq": 4,
+    "ts": 1757635200004,
+    "kind": "message",
+    "content": "event 4",
+    "prev_hash": "6ff299a8db2ccddfbe69d6786dcd44209b63f7d4dad81aee2a9535d25ad4f03e",
+    "hash": "2b38aac0f4d26674a0069aee5493624d6585bce7ba8c30cfb503e54d23f44fb4"
+  },
+  {
+    "seq": 5,
+    "ts": 1757635200005,
+    "kind": "decision",
+    "content": "event 5",
+    "prev_hash": "2b38aac0f4d26674a0069aee5493624d6585bce7ba8c30cfb503e54d23f44fb4",
+    "hash": "e6beaad270377ac595b390acd802eb0321e90db6cd43afd8cc3643e3ade3ec84"
+  },
+  {
+    "seq": 6,
+    "ts": 1757635200006,
+    "kind": "message",
+    "content": "event 6",
+    "prev_hash": "e6beaad270377ac595b390acd802eb0321e90db6cd43afd8cc3643e3ade3ec84",
+    "hash": "a6d79e6e23c2fc09f722546af15ce7e7c95c3895a787bb81b5e1bbd1a06cd010"
+  },
+  {
+    "seq": 7,
+    "ts": 1757635200007,
+    "kind": "run_finished",
+    "metadata": {"event_count":8},
+    "prev_hash": "a6d79e6e23c2fc09f722546af15ce7e7c95c3895a787bb81b5e1bbd1a06cd010",
+    "hash": "1711f9a6737029f68241440f88f43b16a71c110da4873c39824f96f53e885952"
+  }
+]

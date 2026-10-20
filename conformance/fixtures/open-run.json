@@ -1,0 +1,34 @@
+[
+  {
+    "seq": 0,
+    "ts": 1757635200000,
+    "kind": "run_started",
+    "content": "event 0",
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "hash": "823776f7972f99c7876a71077a5f29d4dc83090498b701dfd2ba40b85ed5b938"
+  },
+  {
+    "seq": 1,
+    "ts": 1757635200001,
+    "kind": "message",
+    "content": "event 1",
+    "prev_hash": "823776f7972f99c7876a71077a5f29d4dc83090498b701dfd2ba40b85ed5b938",
+    "hash": "b370e596f5bc9ad28727d13295adca7f7eace455a1680313fc3bf5423b2a5e1c"
+  },
+  {
+    "seq": 2,
+    "ts": 1757635200002,
+    "kind": "message",
+    "content": "event 2",
+    "prev_hash": "b370e596f5bc9ad28727d13295adca7f7eace455a1680313fc3bf5423b2a5e1c",
+    "hash": "5064d3bd9ed62d20e9d33b2f391c191a49612b195fb8eea4401bf297ec27d52d"
+  },
+  {
+    "seq": 3,
+    "ts": 1757635200003,
+    "kind": "message",
+    "content": "event 3",
+    "prev_hash": "5064d3bd9ed62d20e9d33b2f391c191a49612b195fb8eea4401bf297ec27d52d",
+    "hash": "6ff299a8db2ccddfbe69d6786dcd44209b63f7d4dad81aee2a9535d25ad4f03e"
+  }
+]

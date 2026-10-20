@@ -1,0 +1,165 @@
+{
+  "protocol": "tlr/1",
+  "description": "The full arc of a gated agent run: open, record, gate, resolve, seal, verify. Every conformant server must reproduce it, and every conformant client must be able to drive it.",
+  "vars": { "RUN": "$FRESH_RUN_ID" },
+  "steps": [
+    {
+      "name": "discovery",
+      "request": { "method": "GET", "path": "/v1/.well-known/tideline" },
+      "expect": {
+        "status": 200,
+        "header_eq": { "tideline-protocol": "1" },
+        "json_has": ["protocol_versions", "capabilities", "keys"]
+      }
+    },
+    {
+      "name": "create-run",
+      "request": {
+        "method": "POST",
+        "path": "/v1/runs",
+        "body": {
+          "run_id": "$RUN",
+          "agent": { "name": "underwriter", "version": "2.1.0" },
+          "subject_ref": "applicant-4821",
+          "labels": { "product": "personal-loan", "jurisdiction": "IE" }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "json_has": ["run_id", "head_seq", "head_hash", "agent"],
+        "json_eq": { "head_seq": 0 }
+      }
+    },
+    {
+      "name": "duplicate-run-conflicts",
+      "request": {
+        "method": "POST",
+        "path": "/v1/runs",
+        "body": { "run_id": "$RUN", "agent": { "name": "underwriter", "version": "2.1.0" } }
+      },
+      "expect": { "status": 409 }
+    },
+    {
+      "name": "append-message",
+      "request": {
+        "method": "POST",
+        "path": "/v1/runs/$RUN/events",
+        "body": { "kind": "message", "role": "user", "content": "Applicant #4821 requests EUR40,000" }
+      },
+      "expect": { "status": 200, "json_eq": { "seq": 1 }, "json_has": ["ts", "hash", "prev_hash"] }
+    },
+    {
+      "name": "append-tool-call-with-metadata",
+      "request": {
+        "method": "POST",
+        "path": "/v1/runs/$RUN/events",
+        "body": {
+          "kind": "tool_call",
+          "role": "tool",
+          "name": "pull_credit_report",
+          "content": "score=690 utilisation=42%",
+          "metadata": { "bureau": "experian", "ms": 410 }
+        }
+      },
+      "expect": { "status": 200, "json_eq": { "seq": 2 } }
+    },
+    {
+      "name": "unknown-kind-is-rejected",
+      "request": {
+        "method": "POST",
+        "path": "/v1/runs/$RUN/events",
+        "body": { "kind": "wire_transfer", "content": "x" }
+      },
+      "expect": { "status": 400 }
+    },
+    {
+      "name": "idempotent-retry-appends-once",
+      "request": {
+        "method": "POST",
+        "path": "/v1/runs/$RUN/events",
+        "headers": { "idempotency-key": "transcript-retry-1" },
+        "body": { "kind": "message", "content": "retried" }
+      },
+      "expect": { "status": 200, "json_eq": { "seq": 3 } },
+      "repeat": 2
+    },
+    {
+      "name": "open-gate",
+      "request": {
+        "method": "POST",
+        "path": "/v1/runs/$RUN/approvals",
+        "body": { "action": "Approve EUR40,000 loan for applicant #4821", "expires_in": 7200 }
+      },
+      "expect": { "status": 200, "json_has": ["seq", "expires_at"], "json_eq": { "seq": 4 } },
+      "capture": { "GATE": "seq" }
+    },
+    {
+      "name": "gate-is-pending",
+      "request": { "method": "GET", "path": "/v1/runs/$RUN/approvals" },
+      "expect": { "status": 200, "array_len": 1 }
+    },
+    {
+      "name": "resolve-gate",
+      "request": {
+        "method": "POST",
+        "path": "/v1/runs/$RUN/approvals/$GATE/resolve",
+        "body": { "decision": "approved", "reviewer": "Jane Okafor (Credit Risk)", "note": "Income verified" }
+      },
+      "expect": {
+        "status": 200,
+        "json_eq": { "decision": "approved", "target_seq": "$GATE", "attested": false }
+      }
+    },
+    {
+      "name": "second-resolution-conflicts",
+      "request": {
+        "method": "POST",
+        "path": "/v1/runs/$RUN/approvals/$GATE/resolve",
+        "body": { "decision": "rejected" }
+      },
+      "expect": { "status": 409 }
+    },
+    {
+      "name": "queue-is-empty-again",
+      "request": { "method": "GET", "path": "/v1/runs/$RUN/approvals" },
+      "expect": { "status": 200, "array_len": 0 }
+    },
+    {
+      "name": "append-the-decision",
+      "request": {
+        "method": "POST",
+        "path": "/v1/runs/$RUN/events",
+        "body": { "kind": "decision", "name": "loan_approved", "content": "EUR40,000 approved" }
+      },
+      "expect": { "status": 200, "json_eq": { "seq": 6 } }
+    },
+    {
+      "name": "seal-the-run",
+      "request": { "method": "POST", "path": "/v1/runs/$RUN/complete" },
+      "expect": { "status": 200, "json_eq": { "seq": 7 } }
+    },
+    {
+      "name": "append-after-seal-conflicts",
+      "request": {
+        "method": "POST",
+        "path": "/v1/runs/$RUN/events",
+        "body": { "kind": "message", "content": "late" }
+      },
+      "expect": { "status": 409 }
+    },
+    {
+      "name": "the-record-verifies",
+      "request": { "method": "GET", "path": "/v1/runs/$RUN/events" },
+      "expect": { "status": 200, "array_len": 8, "chain_verifies": true }
+    },
+    {
+      "name": "checkpoint-was-written-on-seal",
+      "request": { "method": "GET", "path": "/v1/runs/$RUN/checkpoint" },
+      "expect": {
+        "status": 200,
+        "json_has": ["run_id", "seq", "head_hash", "ts", "key_id", "sig"],
+        "json_eq": { "seq": 7 }
+      }
+    }
+  ]
+}

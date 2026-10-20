@@ -34,6 +34,108 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
-        run: cargo test --all-targets
+        run: cargo test --workspace --all-targets
+      - name: Offline verifier builds without any network dependency
+        run: cargo build -p tideline-cli --no-default-features
+      - name: Conformance — independent implementation
+        run: python3 conformance/independent_check.py
+      # Only crates whose dependencies are already on crates.io can be
+      # dry-run: `cargo publish` resolves path dependencies against the
+      # registry, so the other three fail with "no matching package named
+      # tideline-proto" until the first release publishes it. After that,
+      # release.yml publishes all four in dependency order.
+      - name: Package check
+        run: cargo publish -p tideline-proto --dry-run --allow-dirty
+      - name: Manifests are complete enough to publish
+        run: python3 scripts/check-manifests.py
+      - name: Workflows parse
+        run: |
+          pip install --quiet pyyaml
+          python3 scripts/check-workflows.py
+
+  msrv:
+    name: engine · MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Declared in the workspace manifest. A bump is a breaking change for
+      # anyone pinned to an older toolchain, so it fails here rather than in
+      # someone's build.
+      # 1.86 is where the floor actually is: reqwest pulls idna, which pulls the
+      # icu crates, and those require it. 1.85 fails.
+      - uses: dtolnay/rust-toolchain@1.86.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace
+
+  typescript:
+    name: sdk · typescript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The suite drives a real server, not a mock: a mock would agree with
+      # whatever the SDK believes, which is the belief under test.
+      - run: cargo build --bin tideline-server
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: sdk/ts/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: sdk/ts
+      - run: pnpm typecheck
+        working-directory: sdk/ts
+      - run: pnpm test
+        working-directory: sdk/ts
+      - run: pnpm build
+        working-directory: sdk/ts
+
+  python:
+    name: sdk · python
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --bin tideline-server
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - run: pip install pytest build
+      - run: python -m pytest sdk/python/tests -q
+        env:
+          PYTHONPATH: sdk/python/src
+      - run: python -m build sdk/python
+
+  go:
+    name: sdk · go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --bin tideline-server
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: go vet ./...
+        working-directory: sdk/go
+      - run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+        working-directory: sdk/go
+      - run: go test ./...
+        working-directory: sdk/go
+
+  supply-chain:
+    name: supply chain · audit + licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny check

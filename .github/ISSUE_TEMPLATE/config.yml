@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/dylanp12/tideline/blob/main/SECURITY.md
+    about: Please report privately, not as a public issue.
+  - name: Protocol question
+    url: https://github.com/dylanp12/tideline/blob/main/spec/tlr-1.md
+    about: The specification, including the canonical form byte by byte.

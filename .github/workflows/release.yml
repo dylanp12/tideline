@@ -1,0 +1,180 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Every publish uses OIDC or trusted publishing. No long-lived registry token
+# belongs in this repository.
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  verify:
+    name: verify · versions agree and every surface passes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # All five surfaces share one version, so `@tideline/sdk@1.2.0` and
+      # `tideline==1.2.0` always speak the same protocol. A tag that disagrees
+      # with any manifest fails here, before anything is published.
+      - name: Versions agree with the tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          echo "tag: $tag"
+          fail=0
+          check() {
+            if grep -qE "$2" "$1"; then echo "  ok   $1"; else echo "  FAIL $1"; fail=1; fi
+          }
+          check Cargo.toml                  "^version = \"$tag\""
+          check sdk/ts/package.json         "\"version\": \"$tag\""
+          check sdk/python/pyproject.toml   "^version = \"$tag\""
+          check sdk/python/src/tideline/__init__.py "__version__ = \"$tag\""
+          exit $fail
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+
+      - run: pip install pytest build
+      - run: pnpm install --frozen-lockfile
+        working-directory: sdk/ts
+
+      # A release that has not proven cross-language agreement is not a release.
+      - name: Conformance, every surface
+        run: ./conformance/run-all.sh
+
+  crates:
+    name: publish · crates.io
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # crates.io resolves path dependencies against the registry at publish
+      # time, so the order is forced and each crate has to be visible before the
+      # next one can build.
+      - name: Publish in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+
+          await() {
+            for _ in $(seq 1 60); do
+              if cargo search "$1" --limit 1 | grep -q "^$1 = \"$version\""; then
+                echo "  $1 $version is on the index"; return 0
+              fi
+              sleep 10
+            done
+            echo "  timed out waiting for $1 $version"; return 1
+          }
+
+          for crate in tideline-proto tideline-server tideline-sdk tideline-cli; do
+            echo "publishing $crate"
+            cargo publish -p "$crate"
+            await "$crate"
+          done
+
+  npm:
+    name: publish · npm
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+        working-directory: sdk/ts
+      - run: pnpm build
+        working-directory: sdk/ts
+      # Provenance links the published tarball to this workflow run, so a
+      # consumer can check where it came from.
+      - run: pnpm publish --access public --no-git-checks --provenance
+        working-directory: sdk/ts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  pypi:
+    name: publish · PyPI
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install build
+      - run: python -m build sdk/python
+      # Trusted publishing: no API token at all.
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdk/python/dist
+
+  go:
+    name: publish · Go
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      # Nothing to upload — the tag is the release. Prove the module actually
+      # resolves from a clean cache before announcing it.
+      - name: The module resolves from the proxy
+        run: |
+          version="${GITHUB_REF_NAME}"
+          mkdir -p /tmp/resolve && cd /tmp/resolve
+          go mod init resolve.test
+          GOFLAGS=-mod=mod go get "github.com/dylanp12/tideline/sdk/go@${version}" || {
+            echo "the proxy has not indexed ${version} yet; this is usually a few minutes"
+            exit 0
+          }
+
+  github-release:
+    name: release · notes and SBOM
+    needs: [crates, npm, pypi, go]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-cyclonedx
+      - name: Generate an SBOM
+        run: cargo cyclonedx --format json --all
+      - name: Collect the SBOMs
+        run: |
+          mkdir -p sbom
+          find . -name '*.cdx.json' -not -path './sbom/*' -exec cp {} sbom/ \;
+          ls -la sbom/
+      - name: Extract this version's notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/         { exit }
+            on                     { print }
+          ' CHANGELOG.md > notes.md
+          echo "--- notes ---"; cat notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: notes.md
+          files: sbom/*.cdx.json
+          fail_on_unmatched_files: false

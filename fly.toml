@@ -1,9 +1,18 @@
 # Fly.io deploy config for the Tideline engine.
-app = "tideline" # rename to your own Fly app
+# Deployed app: tideline-engine.fly.dev (create with `fly apps create <name>`).
+app = "tideline-engine"
 primary_region = "ams"
 
 [build]
   dockerfile = "Dockerfile"
+
+# Records must outlive a machine restart.
+[mounts]
+  source = "tideline_data"
+  destination = "/data"
+
+[env]
+  TIDELINE_RECORD_DB = "/data/tideline.db"
 
 [http_service]
   internal_port = 8080

@@ -1,0 +1,38 @@
+[package]
+name = "tideline-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The tideline command line: verify an agent-run record offline, export one, or follow one live."
+keywords = ["ai-agents", "audit", "eu-ai-act", "tamper-evident", "cli"]
+categories = ["command-line-utilities", "cryptography"]
+readme = "README.md"
+
+[[bin]]
+name = "tideline"
+path = "src/main.rs"
+
+[features]
+# On by default so `cargo install tideline-cli` gives the whole tool. Turn it
+# off — `--no-default-features` — for a pure offline verifier that cannot open
+# a socket, which is what an auditor in a locked-down environment wants.
+default = ["client"]
+client = ["dep:tideline-sdk", "dep:tokio", "dep:futures"]
+
+[dependencies]
+tideline-proto = { version = "0.2.0", path = "../tideline-proto" }
+clap = { version = "4", features = ["derive", "env"] }
+serde_json = { version = "1", features = ["raw_value"] }
+base64 = "0.22"
+ed25519-dalek = "2"
+
+tideline-sdk = { version = "0.2.0", path = "../tideline-sdk", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+futures = { version = "0.3", optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+base64 = "0.22"
+ed25519-dalek = "2"

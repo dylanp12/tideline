@@ -1,1 +1,31 @@
 /target
+.vercel
+
+# internal launch notes — not for the public repo
+/launch
+
+# remotion video build
+video/node_modules
+video/out
+
+# JS/TS SDK build output
+sdk/ts/node_modules
+sdk/ts/dist
+sdk/ts/*.tgz
+
+# Python SDK build output
+sdk/python/dist
+sdk/python/build
+sdk/python/**/__pycache__
+sdk/python/*.egg-info
+.pytest_cache
+/tmp
+
+# Never again: removing cloud/ deleted cloud/.gitignore, which held the rule
+# that kept its node_modules out. The next `git add -A` swept in 34k files.
+# These are repo-wide so no subdirectory's ignore file is load-bearing.
+node_modules/
+.next/
+*.tsbuildinfo
+__pycache__/
+dist/

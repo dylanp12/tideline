@@ -1,0 +1,21 @@
+[package]
+name = "tideline-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TLR/1 wire types, canonical hashing, chain verification, and signed checkpoints. No I/O."
+keywords = ["ai-agents", "audit", "tamper-evident", "eu-ai-act", "hash-chain"]
+categories = ["cryptography", "data-structures"]
+readme = "README.md"
+
+[dependencies]
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+base64 = "0.22"
+
+[dev-dependencies]
+rand = "0.8"

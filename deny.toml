@@ -1,0 +1,34 @@
+# Supply-chain policy. Financial-services security reviews ask for this, and the
+# answer should be a file in the repository rather than a promise.
+
+[advisories]
+version = 2
+# Fail on a dependency the registry has withdrawn, not only on a known CVE.
+yanked = "deny"
+
+[licenses]
+version = 2
+# Permissive only. A copyleft dependency would change what downstream users can
+# do with a record verifier they embed, and that is not ours to decide for them.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  # webpki-roots ships Mozilla's CA bundle under this. Permissive, and needed
+  # because rustls verifies TLS against it.
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
